@@ -37,6 +37,11 @@ The agreement was signed on March 5, 2026.`;
 
 const monthsFull = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const monthLookup: Record<string, number> = Object.fromEntries(monthsFull.flatMap((month, index) => [[month.toLowerCase(), index], [month.slice(0, 3).toLowerCase(), index]]));
+const monthPattern = "(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)";
+const weekdayPattern = "(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|Mon|Tue|Tues|Wed|Thu|Thur|Thurs|Fri|Sat|Sun)";
+// PDF and Word extractors may insert spaces or use typographic dashes even
+// when a date looks like `01-Dec-2025` on the page.
+const flexibleDateSeparator = "[\\s\\u200B\\u2060]*[-‐‑‒–—−/.][\\s\\u200B\\u2060]*";
 const weekdaysFull = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const weekdaysShort = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const numberWords: Record<string, number> = {
@@ -73,6 +78,16 @@ function matchCase(value: string, template: string) {
   return value;
 }
 
+function monthForTemplate(month: number, template: string) {
+  const value = template.length <= 4 ? monthsFull[month].slice(0, 3) : monthsFull[month];
+  return matchCase(value, template);
+}
+
+function shiftValidParts(year: number, month: number, day: number, amount: number, preserveMonthEnd: boolean) {
+  if (!Number.isInteger(year) || year < 1000 || year > 9999 || !Number.isInteger(month) || month < 0 || month > 11 || !Number.isInteger(day) || day < 1 || day > daysInMonth(year, month)) return null;
+  return shiftParts(year, month, day, amount, preserveMonthEnd);
+}
+
 function weekdayForDate(year: number, month: number, day: number, template: string) {
   const weekday = new Date(Date.UTC(year, month, day)).getUTCDay();
   const value = template.length > 5 ? weekdaysFull[weekday] : weekdaysShort[weekday];
@@ -83,9 +98,10 @@ export function shiftDateLabel(value: string, amount: number, preserveMonthEnd =
   const timestampDate = value.match(/^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|Mon|Tue|Tues|Wed|Thu|Thur|Thurs|Fri|Sat|Sun)(,?)\s+(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?\s+(\d{1,2})(st|nd|rd|th)?(,)?\s+(\d{2}:\d{2}(?::\d{2})?)\s+((?:GMT|UTC)(?:[+-]\d{4})?)\s+(\d{4})$/i);
   if (timestampDate) {
     const [, rawWeekday, weekdayComma, rawMonth, rawDay, suffix, dayComma, time, timezone, rawYear] = timestampDate;
-    const shifted = shiftParts(Number(rawYear), monthLookup[rawMonth.slice(0, 3).toLowerCase()], Number(rawDay), amount, preserveMonthEnd);
+    const shifted = shiftValidParts(Number(rawYear), monthLookup[rawMonth.slice(0, 3).toLowerCase()], Number(rawDay), amount, preserveMonthEnd);
+    if (!shifted) return value;
     const weekdayName = weekdayForDate(shifted.year, shifted.month, shifted.day, rawWeekday);
-    const monthName = rawMonth.length <= 4 ? monthsFull[shifted.month].slice(0, 3) : monthsFull[shifted.month];
+    const monthName = monthForTemplate(shifted.month, rawMonth);
     const day = suffix ? ordinal(shifted.day) : String(shifted.day).padStart(rawDay.length, "0");
     return `${weekdayName}${weekdayComma} ${monthName} ${day}${dayComma ?? ""} ${time} ${timezone} ${shifted.year}`;
   }
@@ -93,18 +109,31 @@ export function shiftDateLabel(value: string, amount: number, preserveMonthEnd =
   const weekdayFirst = value.match(/^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|Mon|Tue|Tues|Wed|Thu|Thur|Thurs|Fri|Sat|Sun)(,?)\s+(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?\s+(\d{1,2})(st|nd|rd|th)?(,)?\s+(\d{4})$/i);
   if (weekdayFirst) {
     const [, rawWeekday, weekdayComma, rawMonth, rawDay, suffix, dayComma, rawYear] = weekdayFirst;
-    const shifted = shiftParts(Number(rawYear), monthLookup[rawMonth.slice(0, 3).toLowerCase()], Number(rawDay), amount, preserveMonthEnd);
+    const shifted = shiftValidParts(Number(rawYear), monthLookup[rawMonth.slice(0, 3).toLowerCase()], Number(rawDay), amount, preserveMonthEnd);
+    if (!shifted) return value;
     const weekdayName = weekdayForDate(shifted.year, shifted.month, shifted.day, rawWeekday);
-    const monthName = rawMonth.length <= 4 ? monthsFull[shifted.month].slice(0, 3) : monthsFull[shifted.month];
+    const monthName = monthForTemplate(shifted.month, rawMonth);
     const day = suffix ? ordinal(shifted.day) : String(shifted.day).padStart(rawDay.length, "0");
     return `${weekdayName}${weekdayComma} ${monthName} ${day}${dayComma ?? ""} ${shifted.year}`;
+  }
+
+  const weekdayDayFirst = value.match(/^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|Mon|Tue|Tues|Wed|Thu|Thur|Thurs|Fri|Sat|Sun)(,?)\s+(\d{1,2})(st|nd|rd|th)?\s+(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?(,)?\s+(\d{4})$/i);
+  if (weekdayDayFirst) {
+    const [, rawWeekday, weekdayComma, rawDay, suffix, rawMonth, dayComma, rawYear] = weekdayDayFirst;
+    const shifted = shiftValidParts(Number(rawYear), monthLookup[rawMonth.slice(0, 3).toLowerCase()], Number(rawDay), amount, preserveMonthEnd);
+    if (!shifted) return value;
+    const weekdayName = weekdayForDate(shifted.year, shifted.month, shifted.day, rawWeekday);
+    const monthName = monthForTemplate(shifted.month, rawMonth);
+    const day = suffix ? ordinal(shifted.day) : String(shifted.day).padStart(rawDay.length, "0");
+    return `${weekdayName}${weekdayComma} ${day} ${monthName}${dayComma ?? ""} ${shifted.year}`;
   }
 
   const monthFirst = value.match(/^(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?\s+(\d{1,2})(st|nd|rd|th)?(,)?\s+(\d{4})$/i);
   if (monthFirst) {
     const [, rawMonth, rawDay, suffix, comma, rawYear] = monthFirst;
-    const shifted = shiftParts(Number(rawYear), monthLookup[rawMonth.slice(0, 3).toLowerCase()], Number(rawDay), amount, preserveMonthEnd);
-    const monthName = rawMonth.length <= 4 ? monthsFull[shifted.month].slice(0, 3) : monthsFull[shifted.month];
+    const shifted = shiftValidParts(Number(rawYear), monthLookup[rawMonth.slice(0, 3).toLowerCase()], Number(rawDay), amount, preserveMonthEnd);
+    if (!shifted) return value;
+    const monthName = monthForTemplate(shifted.month, rawMonth);
     const day = suffix ? ordinal(shifted.day) : String(shifted.day).padStart(rawDay.length, "0");
     return `${monthName} ${day}${comma ?? ""} ${shifted.year}`;
   }
@@ -112,34 +141,57 @@ export function shiftDateLabel(value: string, amount: number, preserveMonthEnd =
   const dayFirst = value.match(/^(\d{1,2})(st|nd|rd|th)?\s+(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?(,)?\s+(\d{4})$/i);
   if (dayFirst) {
     const [, rawDay, suffix, rawMonth, comma, rawYear] = dayFirst;
-    const shifted = shiftParts(Number(rawYear), monthLookup[rawMonth.slice(0, 3).toLowerCase()], Number(rawDay), amount, preserveMonthEnd);
-    const monthName = rawMonth.length <= 4 ? monthsFull[shifted.month].slice(0, 3) : monthsFull[shifted.month];
+    const shifted = shiftValidParts(Number(rawYear), monthLookup[rawMonth.slice(0, 3).toLowerCase()], Number(rawDay), amount, preserveMonthEnd);
+    if (!shifted) return value;
+    const monthName = monthForTemplate(shifted.month, rawMonth);
     const day = suffix ? ordinal(shifted.day) : String(shifted.day).padStart(rawDay.length, "0");
     return `${day} ${monthName}${comma ?? ""} ${shifted.year}`;
   }
 
-  const wordHyphenated = value.match(/^(\d{1,2})-(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)-(\d{4})$/i);
-  if (wordHyphenated) {
-    const shifted = shiftParts(Number(wordHyphenated[3]), monthLookup[wordHyphenated[2].slice(0, 3).toLowerCase()], Number(wordHyphenated[1]), amount, preserveMonthEnd);
-    const monthName = wordHyphenated[2].length <= 4 ? monthsFull[shifted.month].slice(0, 3) : monthsFull[shifted.month];
-    return `${String(shifted.day).padStart(wordHyphenated[1].length, "0")}-${monthName}-${shifted.year}`;
+  const dayNamedSeparated = value.match(new RegExp(`^(\\d{1,2})(${flexibleDateSeparator})(${monthPattern})(${flexibleDateSeparator})(\\d{4})$`, "i"));
+  if (dayNamedSeparated) {
+    const [, rawDay, firstSeparator, rawMonth, secondSeparator, rawYear] = dayNamedSeparated;
+    const shifted = shiftValidParts(Number(rawYear), monthLookup[rawMonth.slice(0, 3).toLowerCase()], Number(rawDay), amount, preserveMonthEnd);
+    if (!shifted) return value;
+    return `${String(shifted.day).padStart(rawDay.length, "0")}${firstSeparator}${monthForTemplate(shifted.month, rawMonth)}${secondSeparator}${shifted.year}`;
   }
 
-  const iso = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (iso) {
-    const shifted = shiftParts(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]), amount, preserveMonthEnd);
-    return `${shifted.year}-${String(shifted.month + 1).padStart(2, "0")}-${String(shifted.day).padStart(2, "0")}`;
+  const monthNamedSeparated = value.match(new RegExp(`^(${monthPattern})(${flexibleDateSeparator})(\\d{1,2})(${flexibleDateSeparator})(\\d{4})$`, "i"));
+  if (monthNamedSeparated) {
+    const [, rawMonth, firstSeparator, rawDay, secondSeparator, rawYear] = monthNamedSeparated;
+    const shifted = shiftValidParts(Number(rawYear), monthLookup[rawMonth.slice(0, 3).toLowerCase()], Number(rawDay), amount, preserveMonthEnd);
+    if (!shifted) return value;
+    return `${monthForTemplate(shifted.month, rawMonth)}${firstSeparator}${String(shifted.day).padStart(rawDay.length, "0")}${secondSeparator}${shifted.year}`;
   }
 
-  const numeric = value.match(/^(\d{1,2})([./-])(\d{1,2})\2(\d{4})$/);
+  const yearNamedSeparated = value.match(new RegExp(`^(\\d{4})(${flexibleDateSeparator})(${monthPattern})(${flexibleDateSeparator})(\\d{1,2})$`, "i"));
+  if (yearNamedSeparated) {
+    const [, rawYear, firstSeparator, rawMonth, secondSeparator, rawDay] = yearNamedSeparated;
+    const shifted = shiftValidParts(Number(rawYear), monthLookup[rawMonth.slice(0, 3).toLowerCase()], Number(rawDay), amount, preserveMonthEnd);
+    if (!shifted) return value;
+    return `${shifted.year}${firstSeparator}${monthForTemplate(shifted.month, rawMonth)}${secondSeparator}${String(shifted.day).padStart(rawDay.length, "0")}`;
+  }
+
+  const yearFirstNumeric = value.match(new RegExp(`^(\\d{4})(${flexibleDateSeparator})(\\d{1,2})(${flexibleDateSeparator})(\\d{1,2})$`));
+  if (yearFirstNumeric) {
+    const [, rawYear, firstSeparator, rawMonth, secondSeparator, rawDay] = yearFirstNumeric;
+    const shifted = shiftValidParts(Number(rawYear), Number(rawMonth) - 1, Number(rawDay), amount, preserveMonthEnd);
+    if (!shifted) return value;
+    return `${shifted.year}${firstSeparator}${String(shifted.month + 1).padStart(rawMonth.length, "0")}${secondSeparator}${String(shifted.day).padStart(rawDay.length, "0")}`;
+  }
+
+  const numeric = value.match(new RegExp(`^(\\d{1,2})(${flexibleDateSeparator})(\\d{1,2})(${flexibleDateSeparator})(\\d{4})$`));
   if (numeric) {
     const first = Number(numeric[1]);
-    const second = Number(numeric[3]);
-    const dayFirstFormat = numeric[2] === "-" || first > 12;
-    const shifted = shiftParts(Number(numeric[4]), (dayFirstFormat ? second : first) - 1, dayFirstFormat ? first : second, amount, preserveMonthEnd);
-    const month = String(shifted.month + 1).padStart(numeric[1].length, "0");
-    const day = String(shifted.day).padStart(numeric[3].length, "0");
-    return dayFirstFormat ? `${day}${numeric[2]}${month}${numeric[2]}${shifted.year}` : `${month}${numeric[2]}${day}${numeric[2]}${shifted.year}`;
+    const separatorCharacter = numeric[2].match(/[-‐‑‒–—−/.]/)?.[0] ?? "/";
+    const dayFirstFormat = !/[/.]/.test(separatorCharacter) || first > 12;
+    const rawDay = dayFirstFormat ? numeric[1] : numeric[3];
+    const rawMonth = dayFirstFormat ? numeric[3] : numeric[1];
+    const shifted = shiftValidParts(Number(numeric[5]), Number(rawMonth) - 1, Number(rawDay), amount, preserveMonthEnd);
+    if (!shifted) return value;
+    const month = String(shifted.month + 1).padStart(rawMonth.length, "0");
+    const day = String(shifted.day).padStart(rawDay.length, "0");
+    return dayFirstFormat ? `${day}${numeric[2]}${month}${numeric[4]}${shifted.year}` : `${month}${numeric[2]}${day}${numeric[4]}${shifted.year}`;
   }
   return value;
 }
@@ -257,17 +309,18 @@ function DocxDocumentPreview({ blob }: { blob: Blob }) {
 }
 
 export function findDates(text: string, plan: InstructionPlan) {
-  const month = "(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)";
-  const weekday = "(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|Mon|Tue|Tues|Wed|Thu|Thur|Thurs|Fri|Sat|Sun)";
   const clockTime = "\\d{2}:\\d{2}(?::\\d{2})?";
   const timezone = "(?:GMT|UTC)(?:[+-]\\d{4})?";
   const patterns = [
-    new RegExp(`\\b${weekday},?\\s+${month}\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?[,]?\\s+${clockTime}\\s+${timezone}\\s+\\d{4}\\b`, "gi"),
-    new RegExp(`\\b(?:${weekday},?\\s+)?${month}\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?[,]?\\s+\\d{4}\\b`, "gi"),
-    new RegExp(`\\b\\d{1,2}(?:st|nd|rd|th)?\\s+${month}\\.?[,]?\\s+\\d{4}\\b`, "gi"),
-    new RegExp(`\\b\\d{1,2}-${month}-\\d{4}\\b`, "gi"),
-    /\b\d{4}-\d{2}-\d{2}\b/g,
-    /\b\d{1,2}([./-])\d{1,2}\1\d{4}\b/g,
+    new RegExp(`\\b${weekdayPattern},?\\s+${monthPattern}\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?[,]?\\s+${clockTime}\\s+${timezone}\\s+\\d{4}\\b`, "gi"),
+    new RegExp(`\\b(?:${weekdayPattern},?\\s+)?${monthPattern}\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?[,]?\\s+\\d{4}\\b`, "gi"),
+    new RegExp(`\\b${weekdayPattern},?\\s+\\d{1,2}(?:st|nd|rd|th)?\\s+${monthPattern}\\.?[,]?\\s+\\d{4}\\b`, "gi"),
+    new RegExp(`\\b\\d{1,2}(?:st|nd|rd|th)?\\s+${monthPattern}\\.?[,]?\\s+\\d{4}\\b`, "gi"),
+    new RegExp(`\\b\\d{1,2}${flexibleDateSeparator}${monthPattern}${flexibleDateSeparator}\\d{4}\\b`, "gi"),
+    new RegExp(`\\b${monthPattern}${flexibleDateSeparator}\\d{1,2}${flexibleDateSeparator}\\d{4}\\b`, "gi"),
+    new RegExp(`\\b\\d{4}${flexibleDateSeparator}${monthPattern}${flexibleDateSeparator}\\d{1,2}\\b`, "gi"),
+    new RegExp(`\\b\\d{4}${flexibleDateSeparator}\\d{1,2}${flexibleDateSeparator}\\d{1,2}\\b`, "g"),
+    new RegExp(`\\b\\d{1,2}${flexibleDateSeparator}\\d{1,2}${flexibleDateSeparator}\\d{4}\\b`, "g"),
   ];
   const hits: Array<{ value: string; index: number }> = [];
   patterns.forEach((pattern) => {
@@ -276,8 +329,8 @@ export function findDates(text: string, plan: InstructionPlan) {
 
   let skipped = 0;
   const dates = hits
-    .sort((a, b) => a.index - b.index)
-    .filter((hit, index, list) => !list.slice(0, index).some((earlier) => earlier.index === hit.index && earlier.value === hit.value))
+    .sort((a, b) => a.index - b.index || b.value.length - a.value.length)
+    .filter((hit, index, list) => !list.slice(0, index).some((earlier) => hit.index < earlier.index + earlier.value.length))
     .flatMap((hit) => {
       const context = contextAround(text, hit.index, hit.value.length);
       const normalizedContext = context.toLowerCase();
@@ -541,7 +594,7 @@ export default function Home() {
 
             <article className="panel chat-panel">
               <div className="panel-heading"><span className="step orange">02</span><div><h2>Tell DateShift what to change</h2><p>Common instructions work in your own words</p></div></div>
-              <div className="chat-message assistant-message"><span className="ai-avatar">DS</span><p>I recognize dates such as DD-MM-YYYY, Wed Mar 04 2026, and Wed Mar 04 15:57:15 GMT 2026. I also understand forward or backward month shifts, exclusions, and month-end preservation. Your monthly controls are used when your message doesn’t include a duration.</p></div>
+              <div className="chat-message assistant-message"><span className="ai-avatar">DS</span><p>I recognize common numeric, written-month, weekday, timestamp, and mixed-separator date styles—including 01-Dec-2025. I also understand forward or backward month shifts, exclusions, and month-end preservation. Your monthly controls are used when your message doesn’t include a duration.</p></div>
               <label className="instruction-compose" htmlFor="instruction">
                 <span>Your instruction</span>
                 <textarea id="instruction" maxLength={600} value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder={fallbackInstruction} rows={5} />

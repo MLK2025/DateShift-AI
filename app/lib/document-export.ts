@@ -75,10 +75,10 @@ function ancestorByLocalName(node: Element, localName: string) {
 }
 
 function isoDateForControl(value: string) {
-  const iso = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}T00:00:00Z`;
-
   const monthNames = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+  const monthPattern = "(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)";
+  const separator = "[\\s\\u200B\\u2060]*[-‐‑‒–—−/.][\\s\\u200B\\u2060]*";
+  const dateOnly = (year: string, month: number, day: string) => `${year}-${String(month).padStart(2, "0")}-${String(Number(day)).padStart(2, "0")}T00:00:00Z`;
   const timestamp = value.match(/^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|Mon|Tue|Tues|Wed|Thu|Thur|Thurs|Fri|Sat|Sun),?\s+(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?\s+(\d{1,2})(?:st|nd|rd|th)?[,]?\s+(\d{2}:\d{2}(?::\d{2})?)\s+((?:GMT|UTC)(?:[+-]\d{4})?)\s+(\d{4})$/i);
   if (timestamp) {
     const month = monthNames.indexOf(timestamp[1].slice(0, 3).toLowerCase()) + 1;
@@ -91,15 +91,28 @@ function isoDateForControl(value: string) {
   const named = value.match(/^(?:(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|Mon|Tue|Tues|Wed|Thu|Thur|Thurs|Fri|Sat|Sun),?\s+)?(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?\s+(\d{1,2})(?:st|nd|rd|th)?[,]?\s+(\d{4})$/i);
   if (named) {
     const month = monthNames.indexOf(named[1].slice(0, 3).toLowerCase()) + 1;
-    return `${named[3]}-${String(month).padStart(2, "0")}-${String(Number(named[2])).padStart(2, "0")}T00:00:00Z`;
+    return dateOnly(named[3], month, named[2]);
   }
 
-  const numeric = value.match(/^(\d{1,2})([./-])(\d{1,2})\2(\d{4})$/);
+  const dayNamed = value.match(new RegExp(`^(?:(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|Mon|Tue|Tues|Wed|Thu|Thur|Thurs|Fri|Sat|Sun),?\\s+)?(\\d{1,2})(?:st|nd|rd|th)?(?:\\s+|${separator})(${monthPattern})(?:\\.?[,]?\\s+|${separator})(\\d{4})$`, "i"));
+  if (dayNamed) return dateOnly(dayNamed[3], monthNames.indexOf(dayNamed[2].slice(0, 3).toLowerCase()) + 1, dayNamed[1]);
+
+  const separatedMonthFirst = value.match(new RegExp(`^(${monthPattern})(${separator})(\\d{1,2})(${separator})(\\d{4})$`, "i"));
+  if (separatedMonthFirst) return dateOnly(separatedMonthFirst[5], monthNames.indexOf(separatedMonthFirst[1].slice(0, 3).toLowerCase()) + 1, separatedMonthFirst[3]);
+
+  const separatedYearFirst = value.match(new RegExp(`^(\\d{4})(${separator})(${monthPattern})(${separator})(\\d{1,2})$`, "i"));
+  if (separatedYearFirst) return dateOnly(separatedYearFirst[1], monthNames.indexOf(separatedYearFirst[3].slice(0, 3).toLowerCase()) + 1, separatedYearFirst[5]);
+
+  const yearFirstNumeric = value.match(new RegExp(`^(\\d{4})(${separator})(\\d{1,2})(${separator})(\\d{1,2})$`));
+  if (yearFirstNumeric) return dateOnly(yearFirstNumeric[1], Number(yearFirstNumeric[3]), yearFirstNumeric[5]);
+
+  const numeric = value.match(new RegExp(`^(\\d{1,2})(${separator})(\\d{1,2})(${separator})(\\d{4})$`));
   if (!numeric) return null;
-  const dayFirst = numeric[2] === "-" || Number(numeric[1]) > 12;
+  const separatorCharacter = numeric[2].match(/[-‐‑‒–—−/.]/)?.[0] ?? "/";
+  const dayFirst = !/[/.]/.test(separatorCharacter) || Number(numeric[1]) > 12;
   const day = String(dayFirst ? numeric[1] : numeric[3]).padStart(2, "0");
   const month = String(dayFirst ? numeric[3] : numeric[1]).padStart(2, "0");
-  return `${numeric[4]}-${month}-${day}T00:00:00Z`;
+  return `${numeric[5]}-${month}-${day}T00:00:00Z`;
 }
 
 function syncDateContentControl(insertionNode: Element, updatedValue: string) {

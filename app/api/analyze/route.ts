@@ -16,6 +16,7 @@ Read the entire supplied document, including visible text in scanned PDF pages. 
 Rules:
 - Return only dates that the instruction says to update. Do not treat invoice numbers, reference numbers, amounts, page numbers, versions, or standalone years as editable dates unless the instruction explicitly asks for them.
 - Preserve each date's original written format unless the user asks for another format.
+- Recognize written-month dates with compact, spaced, or typographic separators, such as 01-Dec-2025, 01 ‑ Dec ‑ 2025, Dec/01/2025, and 2025-Dec-01.
 - Recognize weekday-prefixed dates such as Wed Mar 04 2026, and recompute the weekday when the date changes.
 - Recognize timestamp dates such as Wed Mar 04 15:57:15 GMT 2026. Preserve the time and timezone while shifting the calendar date.
 - When shifting by months, preserve the day when possible. If that day does not exist in the destination month, use the destination month's final day.

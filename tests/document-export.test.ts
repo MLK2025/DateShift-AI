@@ -36,6 +36,14 @@ async function weekdaySampleDocx() {
   return zip.generateAsync({ type: "uint8array" });
 }
 
+async function namedMonthSampleDocx() {
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`);
+  zip.folder("_rels")?.file(".rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`);
+  zip.folder("word")?.file("document.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:sdt><w:sdtPr><w:date w:fullDate="2025-12-01T00:00:00Z"><w:dateFormat w:val="dd-MMM-yyyy"/></w:date></w:sdtPr><w:sdtContent><w:p><w:pPr><w:shd w:fill="1C4A7E"/></w:pPr><w:r><w:rPr><w:color w:val="FFFFFF"/></w:rPr><w:t>01-</w:t></w:r><w:r><w:rPr><w:b/><w:color w:val="FFFFFF"/></w:rPr><w:t>Dec</w:t></w:r><w:r><w:rPr><w:color w:val="FFFFFF"/></w:rPr><w:t>-2025</w:t></w:r></w:p></w:sdtContent></w:sdt></w:body></w:document>`);
+  return zip.generateAsync({ type: "uint8array" });
+}
+
 test("writes a selected date into a DOCX table and syncs its date control", async () => {
   await mkdir(outputDir, { recursive: true });
   const original = await sampleDocx();
@@ -76,6 +84,22 @@ test("writes a timestamp date and syncs its Word date control", async () => {
   assert.ok(!visibleText.includes("Wed Mar 04 15:57:15 GMT 2026"));
   assert.ok(xml?.includes("2026-06-04T15:57:15Z"));
   await writeFile(`${outputDir}/weekday-date-updated.docx`, updatedBytes);
+});
+
+test("writes a split-run DD-MMM-YYYY date and syncs its Word date control", async () => {
+  const original = await namedMonthSampleDocx();
+  const file = new File([original.slice().buffer as ArrayBuffer], "named-month.docx", { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+  const change = { original: "01-Dec-2025", updated: "01-Mar-2026", sourceIndex: 0, selected: true };
+  const result = await createUpdatedDocument(file, { kind: "docx", text: change.original, pdfSpans: [] }, [change]);
+  assert.equal(result.updatedCount, 1);
+
+  const updatedZip = await JSZip.loadAsync(new Uint8Array(await result.blob.arrayBuffer()));
+  const xml = await updatedZip.file("word/document.xml")?.async("string");
+  const parsed = new DOMParser().parseFromString(xml ?? "", "application/xml");
+  const visibleText = Array.from(parsed.getElementsByTagNameNS("*", "t")).map((node) => node.textContent ?? "").join("");
+  assert.equal(visibleText, "01-Mar-2026");
+  assert.ok(xml?.includes("2026-03-01T00:00:00Z"));
+  assert.ok(xml?.includes('w:fill="1C4A7E"'));
 });
 
 test("writes a selected date over the correct substring in a PDF text span", async () => {
