@@ -1,6 +1,6 @@
 # DateShift AI
 
-DateShift AI is a private browser-based document editor that detects dates in Word and PDF files, applies natural-language date-shifting instructions, previews the result, and downloads an updated copy.
+DateShift AI is a private browser-based document editor that updates dates and recalculates financial figures in Word and PDF files, previews the result, and downloads an updated copy.
 
 [Open the GitHub Pages site](https://mlk2025.github.io/DateShift-AI/)
 
@@ -11,6 +11,9 @@ DateShift AI is a private browser-based document editor that detects dates in Wo
 - Move dates forward or backward by a chosen number of months.
 - Preserve month-end dates and exclude dates such as signatures or deadlines through instructions.
 - Review and edit each detected date before export.
+- Detect currency amounts and financial figures while excluding dates, percentages, and likely IDs.
+- Rebalance selected figures to an exact target total proportionally, equally, or by changing only the final figure.
+- Calculate with integer minor units so the exported figures cannot drift from the requested total through rounding.
 - Preview the exact prepared DOCX or PDF used by the download action.
 - Preserve Word formatting runs, tables, colors, headers, footers, and document structure.
 - Process documents locally in the browser.
@@ -36,7 +39,7 @@ pnpm build
 node --test tests/docx-preview.test.mjs
 ```
 
-The document-export and date-format regression tests run through `tsx` and are located in the `tests` directory.
+The document-export, date-format, and figure-calculation regression tests run through `tsx` and are located in the `tests` directory.
 
 ## Deploy to GitHub Pages
 
@@ -60,4 +63,4 @@ The workflow automatically handles both project repositories such as `DateShift-
 
 ## Document privacy
 
-Uploaded documents are processed in the browser. They are not sent to the application server for date detection, preview generation, or export.
+Uploaded documents are processed in the browser. They are not sent to the application server for date or figure detection, preview generation, or export.

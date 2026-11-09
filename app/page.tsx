@@ -3,10 +3,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { extractDocument, type DocumentExtraction } from "./lib/document-text";
 import type { UpdatedDocument } from "./lib/document-export";
+import { findFigures, rebalanceFigureChanges, type FigureCalculation, type FigureChange, type FigureStrategy } from "./lib/figure-engine";
 
 export const dynamic = "force-static";
 
 type Direction = "forward" | "backward";
+type TaskMode = "dates" | "figures";
 type View = "upload" | "processing" | "review" | "complete";
 type DateMatch = {
   id: number;
@@ -18,6 +20,10 @@ type DateMatch = {
   confidence: number;
   selected: boolean;
 };
+
+function isFigureChange(change: DateMatch | FigureChange): change is FigureChange {
+  return "amountMinor" in change && typeof change.amountMinor === "number";
+}
 
 export type InstructionPlan = {
   months: number;
@@ -33,7 +39,9 @@ const demoText = `SERVICE AGREEMENT 2026
 This Service Agreement becomes effective on March 12, 2026 and remains active through 31 December 2026.
 The first reporting deadline is 30 April 2026. A quarterly review is scheduled for 06/15/2026.
 All renewal requests must be received by 2026-08-01. The final evaluation will take place on November 30, 2026.
-The agreement was signed on March 5, 2026.`;
+The agreement was signed on March 5, 2026.
+Cash allocation: GHS 12,500.00
+Operating reserve: GHS 7,500.00`;
 
 const monthsFull = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const monthLookup: Record<string, number> = Object.fromEntries(monthsFull.flatMap((month, index) => [[month.toLowerCase(), index], [month.slice(0, 3).toLowerCase(), index]]));
@@ -360,16 +368,20 @@ export function findDates(text: string, plan: InstructionPlan) {
 
 export default function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
+  const [task, setTask] = useState<TaskMode>("dates");
   const [file, setFile] = useState<File | null>(null);
   const [fileName, setFileName] = useState("");
   const [extraction, setExtraction] = useState<DocumentExtraction | null>(null);
   const [months, setMonths] = useState(3);
   const [direction, setDirection] = useState<Direction>("forward");
+  const [targetTotal, setTargetTotal] = useState("");
+  const [figureStrategy, setFigureStrategy] = useState<FigureStrategy>("proportional");
+  const [figureCalculation, setFigureCalculation] = useState<FigureCalculation | null>(null);
   const [instruction, setInstruction] = useState("");
   const [refinement, setRefinement] = useState("");
   const [view, setView] = useState<View>("upload");
   const [progress, setProgress] = useState(0);
-  const [dates, setDates] = useState<DateMatch[]>([]);
+  const [dates, setDates] = useState<Array<DateMatch | FigureChange>>([]);
   const [notice, setNotice] = useState("");
   const [assistantMessage, setAssistantMessage] = useState("");
   const [interpretedInstruction, setInterpretedInstruction] = useState("");
@@ -386,7 +398,11 @@ export default function Home() {
   const selectedCount = dates.filter((date) => date.selected).length;
   const exampleDate = useMemo(() => shiftDateLabel("12 March 2026", signedMonths), [signedMonths]);
   const fallbackInstruction = `Move every calendar date ${direction} by ${months} month${months === 1 ? "" : "s"}. Preserve the original date format.`;
-  const effectiveInstruction = instruction.trim() || fallbackInstruction;
+  const figureFallbackInstruction = targetTotal.trim()
+    ? `Make all detected financial figures total ${targetTotal.trim()} ${figureStrategy === "proportional" ? "proportionally" : figureStrategy === "equal" ? "by sharing the difference equally" : "by changing only the final figure"}.`
+    : "";
+  const effectiveInstruction = instruction.trim() || (task === "dates" ? fallbackInstruction : figureFallbackInstruction);
+  const canAnalyze = Boolean(fileName && effectiveInstruction);
 
   useEffect(() => {
     return () => {
@@ -456,6 +472,7 @@ export default function Home() {
     setExtraction(null);
     setNotice("");
     setDates([]);
+    setFigureCalculation(null);
   }
 
   function useDemo() {
@@ -464,6 +481,8 @@ export default function Home() {
     setExtraction({ kind: "docx", text: demoText, pdfSpans: [] });
     setNotice("");
     setDates([]);
+    setFigureCalculation(null);
+    if (task === "figures" && !targetTotal.trim()) setTargetTotal("GHS 30,000.00");
   }
 
   function addPrompt(prompt: string) {
@@ -496,14 +515,23 @@ export default function Home() {
         throw new Error("No readable text was found. If this is a scanned PDF, use a text-searchable PDF or export it with OCR first.");
       }
 
-      const plan = interpretInstruction(nextInstruction, months, direction);
-      const result = findDates(text, plan);
-      setDates(result.dates);
-      const updateCount = result.dates.filter((date) => date.selected).length;
-      setAssistantMessage(updateCount
-        ? `I found ${updateCount} date${updateCount === 1 ? "" : "s"} to update${result.skipped ? ` and left ${result.skipped} unchanged based on your instruction` : ""}.`
-        : `I read the document, but no dates matched this instruction${result.skipped ? `; ${result.skipped} date${result.skipped === 1 ? " was" : "s were"} intentionally left unchanged` : ""}.`);
-      setInterpretedInstruction(plan.summary);
+      if (task === "figures") {
+        const result = findFigures(text, nextInstruction, targetTotal, figureStrategy);
+        setDates(result.changes);
+        setFigureCalculation(result.calculation);
+        setAssistantMessage(result.assistantMessage);
+        setInterpretedInstruction(result.summary);
+      } else {
+        const plan = interpretInstruction(nextInstruction, months, direction);
+        const result = findDates(text, plan);
+        setDates(result.dates);
+        setFigureCalculation(null);
+        const updateCount = result.dates.filter((date) => date.selected).length;
+        setAssistantMessage(updateCount
+          ? `I found ${updateCount} date${updateCount === 1 ? "" : "s"} to update${result.skipped ? ` and left ${result.skipped} unchanged based on your instruction` : ""}.`
+          : `I read the document, but no dates matched this instruction${result.skipped ? `; ${result.skipped} date${result.skipped === 1 ? " was" : "s were"} intentionally left unchanged` : ""}.`);
+        setInterpretedInstruction(plan.summary);
+      }
       setInstruction(nextInstruction);
       setProgress(100);
       setView("review");
@@ -522,6 +550,37 @@ export default function Home() {
 
   function updateDate(id: number, value: string) {
     setDates((current) => current.map((date) => date.id === id ? { ...date, updated: value } : date));
+  }
+
+  function updateSelection(id: number, selected: boolean) {
+    setDates((current) => {
+      const next = current.map((item) => item.id === id ? { ...item, selected } : item);
+      if (task !== "figures" || !figureCalculation || !next.every(isFigureChange)) return next;
+      return rebalanceFigureChanges(next, figureCalculation);
+    });
+  }
+
+  function toggleAllSelections() {
+    setDates((current) => {
+      const selected = selectedCount !== current.length;
+      const next = current.map((item) => ({ ...item, selected }));
+      if (task !== "figures" || !figureCalculation || !next.every(isFigureChange)) return next;
+      return rebalanceFigureChanges(next, figureCalculation);
+    });
+  }
+
+  function switchTask(nextTask: TaskMode) {
+    if (nextTask === task) return;
+    setTask(nextTask);
+    setInstruction("");
+    setRefinement("");
+    setDates([]);
+    setFigureCalculation(null);
+    setAssistantMessage("");
+    setInterpretedInstruction("");
+    setPreparedDocument(null);
+    setPreviewUrl("");
+    setExportError("");
   }
 
   function downloadPreparedDocument(completeAfterDownload = true) {
@@ -557,6 +616,7 @@ export default function Home() {
     setExportError("");
     setExportedFileName("");
     setDownloadedCount(0);
+    setFigureCalculation(null);
   }
 
   return (
@@ -570,7 +630,15 @@ export default function Home() {
       {view === "upload" && (
         <>
           <section className="hero" id="workspace">
-            <div><span className="eyebrow">PRIVATE DOCUMENT DATE EDITOR</span><h1>Move every date.<br /><span>Keep the document.</span></h1><p>Upload a Word or PDF document. DateShift updates approved dates inside a new copy while retaining the original document’s remaining content and layout.</p></div>
+            <div>
+              <span className="eyebrow">PRIVATE DOCUMENT EDITOR</span>
+              <h1>{task === "dates" ? <>Move every date.<br /><span>Keep the document.</span></> : <>Balance every figure.<br /><span>Reach the exact total.</span></>}</h1>
+              <p>{task === "dates" ? "Upload a Word or PDF document. DateShift updates approved dates inside a new copy while retaining the original document’s remaining content and layout." : "Find financial figures, calculate an exact target total without rounding drift, and write the approved amounts into a new Word or PDF copy."}</p>
+              <div className="task-switcher" role="tablist" aria-label="Document editing feature">
+                <button role="tab" aria-selected={task === "dates"} className={task === "dates" ? "active" : ""} onClick={() => switchTask("dates")}><span>◷</span><b>Update dates</b><small>Shift calendar dates</small></button>
+                <button role="tab" aria-selected={task === "figures"} className={task === "figures" ? "active" : ""} onClick={() => switchTask("figures")}><span>Σ</span><b>Balance figures</b><small>Reach an exact total</small></button>
+              </div>
+            </div>
             <div className="trust-card" id="privacy"><span className="shield" aria-hidden="true">✓</span><div><strong>Private on-device mode</strong><small>Your document stays in this browser and is never uploaded to our server.</small></div></div>
           </section>
 
@@ -585,32 +653,38 @@ export default function Home() {
               {notice && <p className="notice" role="alert">{notice}</p>}
               {!fileName && <button className="demo-button" onClick={useDemo}><span>✦</span> Try with a sample document</button>}
 
-              <div className="compact-duration">
-                <div className="direction-tabs" aria-label="Default date shift direction"><button className={direction === "forward" ? "active" : ""} onClick={() => setDirection("forward")}>Move forward</button><button className={direction === "backward" ? "active" : ""} onClick={() => setDirection("backward")}>Move backward</button></div>
-                <div className="month-stepper"><button onClick={() => setMonths(Math.max(1, months - 1))} aria-label="Decrease months">−</button><div><strong>{months}</strong><span>month{months === 1 ? "" : "s"} {direction}</span></div><button onClick={() => setMonths(Math.min(24, months + 1))} aria-label="Increase months">+</button></div>
-                <div className="example-shift"><span>DEFAULT EXAMPLE</span><p><s>12 March 2026</s><b>→</b><strong>{exampleDate}</strong></p></div>
-              </div>
+              {task === "dates" ? (
+                <div className="compact-duration">
+                  <div className="direction-tabs" aria-label="Default date shift direction"><button className={direction === "forward" ? "active" : ""} onClick={() => setDirection("forward")}>Move forward</button><button className={direction === "backward" ? "active" : ""} onClick={() => setDirection("backward")}>Move backward</button></div>
+                  <div className="month-stepper"><button onClick={() => setMonths(Math.max(1, months - 1))} aria-label="Decrease months">−</button><div><strong>{months}</strong><span>month{months === 1 ? "" : "s"} {direction}</span></div><button onClick={() => setMonths(Math.min(24, months + 1))} aria-label="Increase months">+</button></div>
+                  <div className="example-shift"><span>DEFAULT EXAMPLE</span><p><s>12 March 2026</s><b>→</b><strong>{exampleDate}</strong></p></div>
+                </div>
+              ) : (
+                <div className="figure-controls">
+                  <label><span>Target total</span><input value={targetTotal} onChange={(event) => setTargetTotal(event.target.value)} placeholder="GHS 50,000.00" inputMode="decimal" /></label>
+                  <label><span>Adjustment method</span><select value={figureStrategy} onChange={(event) => setFigureStrategy(event.target.value as FigureStrategy)}><option value="proportional">Adjust proportionally</option><option value="equal">Share difference equally</option><option value="last">Change final figure only</option></select></label>
+                  <div className="calculation-note"><span>✓</span><p><strong>Exact-total calculation</strong><small>Uses integer minor units so rounding cannot change the requested total.</small></p></div>
+                </div>
+              )}
             </article>
 
             <article className="panel chat-panel">
               <div className="panel-heading"><span className="step orange">02</span><div><h2>Tell DateShift what to change</h2><p>Common instructions work in your own words</p></div></div>
-              <div className="chat-message assistant-message"><span className="ai-avatar">DS</span><p>I recognize common numeric, written-month, weekday, timestamp, and mixed-separator date styles—including 01-Dec-2025. I also understand forward or backward month shifts, exclusions, and month-end preservation. Your monthly controls are used when your message doesn’t include a duration.</p></div>
+              <div className="chat-message assistant-message"><span className="ai-avatar">DS</span><p>{task === "dates" ? "I recognize common numeric, written-month, weekday, timestamp, and mixed-separator date styles—including 01-Dec-2025. I also understand forward or backward month shifts, exclusions, and month-end preservation." : "Tell me the exact total you need. I can detect currency amounts and financial figures, exclude dates and likely IDs, then adjust the selected values proportionally, equally, or by changing only the final figure."}</p></div>
               <label className="instruction-compose" htmlFor="instruction">
                 <span>Your instruction</span>
-                <textarea id="instruction" maxLength={600} value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder={fallbackInstruction} rows={5} />
+                <textarea id="instruction" maxLength={600} value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder={task === "dates" ? fallbackInstruction : "Make all cash figures total GHS 50,000.00 proportionally."} rows={5} />
                 <small>{instruction.length}/600</small>
               </label>
               <div className="quick-prompts" aria-label="Suggested instructions">
-                <button onClick={() => addPrompt(`Move all dates ${direction} ${months} months.`)}>All dates</button>
-                <button onClick={() => addPrompt("Leave signature dates unchanged.")}>Skip signatures</button>
-                <button onClick={() => addPrompt("Keep month-end dates at the end of the new month.")}>Preserve month-end</button>
+                {task === "dates" ? <><button onClick={() => addPrompt(`Move all dates ${direction} ${months} months.`)}>All dates</button><button onClick={() => addPrompt("Leave signature dates unchanged.")}>Skip signatures</button><button onClick={() => addPrompt("Keep month-end dates at the end of the new month.")}>Preserve month-end</button></> : <><button onClick={() => addPrompt("Adjust all cash figures proportionally.")}>Proportional</button><button onClick={() => addPrompt("Share the difference equally.")}>Equal difference</button><button onClick={() => addPrompt("Change only the final figure.")}>Final figure only</button></>}
               </div>
-              <button className="primary-button" disabled={!fileName} onClick={analyze}>Find &amp; update dates <span>→</span></button>
+              <button className="primary-button" disabled={!canAnalyze} onClick={analyze}>{task === "dates" ? "Find & update dates" : "Calculate exact figures"} <span>→</span></button>
             </article>
           </section>
 
           <section className="preview-strip" id="how-it-works">
-            <div className="preview-heading"><span className="spark">✦</span><div><strong>Download a real updated document</strong><small>DOCX uploads produce an updated Word file; PDFs produce an updated PDF. Scanned image-only PDFs need OCR before upload.</small></div></div>
+            <div className="preview-heading"><span className="spark">✦</span><div><strong>Download a real updated document</strong><small>Update dates or rebalance figures in DOCX and text-based PDF files, with an exact-file preview before download.</small></div></div>
             <div className="process-steps"><span><i>1</i> Upload</span><b>→</b><span><i>2</i> Instruct</span><b>→</b><span><i>3</i> Review</span></div>
           </section>
         </>
@@ -620,8 +694,8 @@ export default function Home() {
         <section className="focus-view processing-view" aria-live="polite">
           <div className="processing-orbit"><span className="document-glyph">DS</span><i /><i /><i /></div>
           <span className="eyebrow">READING YOUR DOCUMENT</span>
-          <h2>Finding dates in context</h2>
-          <p>DateShift is extracting the document text locally, interpreting your instruction, and preparing an editable result.</p>
+          <h2>{task === "dates" ? "Finding dates in context" : "Calculating exact figures"}</h2>
+          <p>{task === "dates" ? "DateShift is extracting the document text locally, interpreting your instruction, and preparing an editable result." : "DateShift is identifying financial figures, excluding date values, and balancing the selected amounts to your exact target."}</p>
           <div className="progress-track"><span style={{ width: `${progress}%` }} /></div>
           <div className="progress-meta"><span>{progress < 50 ? "Reading document content" : progress < 90 ? "Applying your instruction" : "Preparing your review"}</span><strong>{progress}%</strong></div>
           <div className="file-chip"><span>DS</span><div><strong>{fileName}</strong><small>Private browser processing</small></div></div>
@@ -630,8 +704,8 @@ export default function Home() {
 
       {view === "review" && (
         <section className="review-view" id="workspace">
-          <div className="review-topline"><button className="back-button" onClick={() => setView("upload")}>← Back</button><span className="eyebrow">DATE RESULT</span><span className="secure-badge">✓ Private browser processing</span></div>
-          <div className="review-heading"><div><h1>Review your <span>date updates.</span></h1><p>{dates.length ? `${selectedCount} update${selectedCount === 1 ? "" : "s"} selected from ${dates.length} detected date${dates.length === 1 ? "" : "s"} in ${fileName}.` : `No dates matched your instruction in ${fileName}.`}</p></div><div className="shift-summary"><small>DEFAULT ADJUSTMENT</small><strong>{direction === "forward" ? "+" : "−"}{months} <span>month{months === 1 ? "" : "s"}</span></strong></div></div>
+          <div className="review-topline"><button className="back-button" onClick={() => setView("upload")}>← Back</button><span className="eyebrow">{task === "dates" ? "DATE RESULT" : "FIGURE RESULT"}</span><span className="secure-badge">✓ Private browser processing</span></div>
+          <div className="review-heading"><div><h1>Review your <span>{task === "dates" ? "date updates." : "calculated figures."}</span></h1><p>{dates.length ? `${selectedCount} update${selectedCount === 1 ? "" : "s"} selected from ${dates.length} detected ${task === "dates" ? `date${dates.length === 1 ? "" : "s"}` : `figure${dates.length === 1 ? "" : "s"}`} in ${fileName}.` : `No ${task === "dates" ? "dates" : "financial figures"} matched your instruction in ${fileName}.`}</p></div><div className="shift-summary"><small>{task === "dates" ? "DEFAULT ADJUSTMENT" : "EXACT TOTAL"}</small><strong>{task === "dates" ? <>{direction === "forward" ? "+" : "−"}{months} <span>month{months === 1 ? "" : "s"}</span></> : <>{figureCalculation?.targetDisplay ?? "—"}<span>{figureCalculation ? `from ${figureCalculation.currentDisplay}` : "target"}</span></>}</strong></div></div>
 
           <div className="ai-summary"><span className="ai-avatar">DS</span><div><strong>{assistantMessage || "Analysis complete."}</strong><p><b>I understood:</b> {interpretedInstruction || effectiveInstruction}</p></div></div>
 
@@ -640,17 +714,17 @@ export default function Home() {
               <section className="document-preview-card" aria-label="Updated document preview">
                 <div className="document-preview-header">
                   <div><span className="preview-file-type">{extraction?.kind === "pdf" ? "PDF" : "DOCX"}</span><div><strong>Updated document preview</strong><small>This is generated from the same file that will download.</small></div></div>
-                  <span className={`preview-status ${preparedDocument ? "ready" : ""}`}>{preparingPreview ? "Preparing…" : preparedDocument ? `✓ ${preparedDocument.updatedCount} change${preparedDocument.updatedCount === 1 ? "" : "s"} verified` : selectedCount ? "Preview unavailable" : "Select a date"}</span>
+                  <span className={`preview-status ${preparedDocument ? "ready" : ""}`}>{preparingPreview ? "Preparing…" : preparedDocument ? `✓ ${preparedDocument.updatedCount} change${preparedDocument.updatedCount === 1 ? "" : "s"} verified` : selectedCount ? "Preview unavailable" : `Select a ${task === "dates" ? "date" : "figure"}`}</span>
                 </div>
                 <div className="document-preview-body">
                   {preparingPreview ? (
-                    <div className="preview-loading"><i /><i /><i /><p>Writing the selected dates into a private preview…</p></div>
+                    <div className="preview-loading"><i /><i /><i /><p>Writing the selected {task === "dates" ? "dates" : "figures"} into a private preview…</p></div>
                   ) : preparedDocument && extraction?.kind === "pdf" && previewUrl ? (
                     <iframe className="pdf-preview" src={`${previewUrl}#toolbar=0&navpanes=0&view=FitH`} title="Updated PDF preview" />
                   ) : preparedDocument && extraction?.kind === "docx" ? (
                     <DocxDocumentPreview blob={preparedDocument.blob} />
                   ) : (
-                    <div className="preview-empty"><span>⌕</span><p>{selectedCount ? "The preview could not be prepared. Review the message beside the download button." : "Select at least one date to prepare the updated file preview."}</p></div>
+                    <div className="preview-empty"><span>⌕</span><p>{selectedCount ? "The preview could not be prepared. Review the message beside the download button." : `Select at least one ${task === "dates" ? "date" : "figure"} to prepare the updated file preview.`}</p></div>
                   )}
                 </div>
                 <div className="document-preview-footer"><span><i /> Rendered from the exact prepared file used by Download</span><small>{fileName}</small></div>
@@ -658,21 +732,21 @@ export default function Home() {
 
               <div className="review-layout">
               <article className="review-list-card">
-                <div className="review-list-header"><div><strong>Detected date updates</strong><span>{selectedCount} of {dates.length} selected</span></div><button onClick={() => setDates((current) => current.map((date) => ({ ...date, selected: selectedCount !== dates.length })))}>{selectedCount === dates.length ? "Clear all" : "Select all"}</button></div>
+                <div className="review-list-header"><div><strong>{task === "dates" ? "Detected date updates" : "Calculated figure updates"}</strong><span>{selectedCount} of {dates.length} selected</span></div><button onClick={toggleAllSelections}>{selectedCount === dates.length ? "Clear all" : "Select all"}</button></div>
                 <div className="date-list">
                   {dates.map((date) => (
                     <div className={`date-row ${date.selected ? "selected" : ""}`} key={date.id}>
-                      <label className="check-control" aria-label={`Include ${date.original}`}><input type="checkbox" checked={date.selected} onChange={(event) => setDates((current) => current.map((item) => item.id === date.id ? { ...item, selected: event.target.checked } : item))} /><span>✓</span></label>
-                      <div className="date-detail"><div className="context-line"><span>{date.context}</span><b>{date.confidence}% match</b></div><div className="date-change"><s>{date.original}</s><i>→</i><input maxLength={80} aria-label={`Updated value for ${date.original}`} value={date.updated} onChange={(event) => updateDate(date.id, event.target.value)} /></div><small className="date-reason">{date.reason}</small></div>
+                      <label className="check-control" aria-label={`Include ${date.original}`}><input type="checkbox" checked={date.selected} onChange={(event) => updateSelection(date.id, event.target.checked)} /><span>✓</span></label>
+                      <div className="date-detail"><div className="context-line"><span>{date.context}</span><b>{date.confidence}% match</b></div><div className="date-change"><s>{date.original}</s><i>→</i><input maxLength={80} readOnly={task === "figures"} aria-label={`Updated value for ${date.original}`} value={date.updated} onChange={(event) => updateDate(date.id, event.target.value)} /></div><small className="date-reason">{date.reason}</small></div>
                     </div>
                   ))}
                 </div>
               </article>
               <aside className="export-card">
                 <div className="refine-chat"><span className="ai-avatar">DS</span><div><strong>Refine the result</strong><small>Add another instruction</small></div></div>
-                <textarea value={refinement} onChange={(event) => setRefinement(event.target.value)} placeholder="e.g. Keep the signing date unchanged" rows={3} />
+                <textarea value={refinement} onChange={(event) => setRefinement(event.target.value)} placeholder={task === "dates" ? "e.g. Keep the signing date unchanged" : "e.g. Use GHS 75,000 and change only the final figure"} rows={3} />
                 <button className="secondary-button refine-button" disabled={!refinement.trim() || refining} onClick={() => { const combined = `${effectiveInstruction} ${refinement.trim()}`; setRefinement(""); void requestAnalysis(combined, false); }}>{refining ? "Updating…" : "Apply instruction"}</button>
-                <dl><div><dt>Document</dt><dd>{fileName}</dd></div><div><dt>Dates selected</dt><dd>{selectedCount}</dd></div><div><dt>Output check</dt><dd>{preparedDocument ? "Verified" : preparingPreview ? "Preparing" : "Not ready"}</dd></div><div><dt>Processing</dt><dd>Private</dd></div></dl>
+                <dl><div><dt>Document</dt><dd>{fileName}</dd></div><div><dt>{task === "dates" ? "Dates" : "Figures"} selected</dt><dd>{selectedCount}</dd></div>{task === "figures" && figureCalculation && <div><dt>Calculated total</dt><dd>{figureCalculation.targetDisplay}</dd></div>}<div><dt>Output check</dt><dd>{preparedDocument ? "Verified" : preparingPreview ? "Preparing" : "Not ready"}</dd></div><div><dt>Processing</dt><dd>Private</dd></div></dl>
                 {exportError && <p className="notice export-error" role="alert">{exportError}</p>}
                 <button className="primary-button" disabled={!selectedCount || preparingPreview || !preparedDocument} onClick={() => downloadPreparedDocument()}>{preparingPreview ? "Preparing verified preview…" : `Download updated ${extraction?.kind === "pdf" ? "PDF" : "Word file"}`} <span>↓</span></button>
                 <small className="export-note">The download button uses the exact file shown in the preview above.</small>
@@ -680,16 +754,16 @@ export default function Home() {
               </div>
             </>
           ) : (
-            <div className="empty-state"><span>⌕</span><h3>No matching dates</h3><p>The document was read, but no date updates matched your instruction. Change the instruction or choose another document.</p><div><button className="secondary-button" onClick={restart}>Choose another file</button><button className="primary-button" onClick={() => setView("upload")}>Change instruction</button></div></div>
+            <div className="empty-state"><span>⌕</span><h3>No matching {task === "dates" ? "dates" : "figures"}</h3><p>The document was read, but no {task === "dates" ? "date updates" : "editable financial figures"} matched your instruction. Change the instruction or choose another document.</p><div><button className="secondary-button" onClick={restart}>Choose another file</button><button className="primary-button" onClick={() => setView("upload")}>Change instruction</button></div></div>
           )}
         </section>
       )}
 
       {view === "complete" && (
         <section className="focus-view complete-view">
-          <div className="success-ring">✓</div><span className="eyebrow">UPDATED DOCUMENT DOWNLOADED</span><h2>Your updated document is ready.</h2><p>{downloadedCount} approved date update{downloadedCount === 1 ? "" : "s"} have been written into <strong>{exportedFileName || fileName}</strong> while retaining the rest of the document.</p>
+          <div className="success-ring">✓</div><span className="eyebrow">UPDATED DOCUMENT DOWNLOADED</span><h2>Your updated document is ready.</h2><p>{downloadedCount} approved {task === "dates" ? "date" : "figure"} update{downloadedCount === 1 ? "" : "s"} have been written into <strong>{exportedFileName || fileName}</strong> while retaining the rest of the document.</p>
           {exportError && <p className="notice" role="alert">{exportError}</p>}
-          <div className="completion-summary"><div><small>DOCUMENT FORMAT</small><strong>{extraction?.kind === "pdf" ? "PDF" : "Word (.docx)"}</strong></div><div><small>DATES UPDATED</small><strong>{downloadedCount}</strong></div><div><small>FILE STATUS</small><strong className="green">Downloaded</strong></div></div>
+          <div className="completion-summary"><div><small>DOCUMENT FORMAT</small><strong>{extraction?.kind === "pdf" ? "PDF" : "Word (.docx)"}</strong></div><div><small>{task === "dates" ? "DATES" : "FIGURES"} UPDATED</small><strong>{downloadedCount}</strong></div><div><small>FILE STATUS</small><strong className="green">Downloaded</strong></div></div>
           <div className="completion-actions"><button className="primary-button" disabled={!preparedDocument} onClick={() => downloadPreparedDocument(false)}>Download updated file again <span>↓</span></button><button className="secondary-button new-document" onClick={restart}>Process another document <span>→</span></button></div>
         </section>
       )}

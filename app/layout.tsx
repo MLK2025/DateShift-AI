@@ -9,17 +9,17 @@ const siteUrl =
 
 export const metadata: Metadata = {
   metadataBase: new URL(new URL(siteUrl).origin),
-  title: "DateShift — Update document dates privately",
-  description: "Find and update dates in DOCX and PDF documents directly in your browser, with no account or billing required.",
+  title: "DateShift — Update dates and balance document figures",
+  description: "Update dates and calculate exact target totals in DOCX and PDF documents directly in your browser.",
   openGraph: {
-    title: "DateShift — Move every date. Keep every detail.",
-    description: "Find and update dates in DOCX and PDF documents privately in your browser.",
+    title: "DateShift — Update dates. Balance figures. Keep the document.",
+    description: "Update dates and rebalance financial figures to an exact total in Word and PDF documents.",
     images: [{ url: `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/og.png`, width: 800, height: 420, alt: "DateShift AI" }],
   },
   twitter: {
     card: "summary_large_image",
-    title: "DateShift — Move every date. Keep every detail.",
-    description: "Find and update dates in DOCX and PDF documents privately in your browser.",
+    title: "DateShift — Update dates and balance document figures",
+    description: "Update dates and rebalance financial figures to an exact total in Word and PDF documents.",
     images: [`${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/og.png`],
   },
   icons: {

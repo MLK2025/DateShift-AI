@@ -75,6 +75,23 @@ input[type=range] { width: 100%; margin: 17px 0 4px; accent-color: var(--blue); 
 .example-shift s { color: #8c91a0; }
 .example-shift b { color: var(--orange); }
 .example-shift strong { color: var(--ink); }
+.task-switcher { width: min(100%, 470px); margin-top: 22px; padding: 5px; display: grid; grid-template-columns: 1fr 1fr; gap: 5px; border: 1px solid #dfe3ee; border-radius: 13px; background: #f4f5f8; }
+.task-switcher button { min-width: 0; border: 0; border-radius: 9px; padding: 10px 12px; display: grid; grid-template-columns: 29px 1fr; grid-template-rows: auto auto; column-gap: 9px; text-align: left; color: #68718a; background: transparent; cursor: pointer; }
+.task-switcher button > span { grid-row: 1 / 3; width: 29px; height: 29px; display: grid; place-items: center; align-self: center; border-radius: 8px; color: #7d859b; background: #e8eaf0; font-size: 14px; }
+.task-switcher button b { color: inherit; font-size: 10px; line-height: 1.3; }
+.task-switcher button small { margin-top: 2px; color: #9a9fad; font-size: 8px; }
+.task-switcher button.active { color: var(--ink); background: white; box-shadow: 0 3px 10px #28304a12; }
+.task-switcher button.active > span { color: white; background: var(--blue); }
+.figure-controls { margin-top: 20px; padding-top: 19px; display: grid; gap: 12px; border-top: 1px solid #eceae4; }
+.figure-controls label { display: grid; gap: 7px; }
+.figure-controls label > span { color: var(--ink); font-size: 9px; font-weight: 900; text-transform: uppercase; letter-spacing: .65px; }
+.figure-controls input, .figure-controls select { width: 100%; border: 1px solid #ccd3e3; border-radius: 9px; padding: 11px 12px; color: var(--ink); background: #fbfcff; outline: none; font-size: 12px; font-weight: 700; }
+.figure-controls input:focus, .figure-controls select:focus { border-color: var(--blue); box-shadow: 0 0 0 3px #3155d914; }
+.calculation-note { padding: 11px 12px; display: flex; gap: 10px; align-items: center; border: 1px solid #d7eee4; border-radius: 10px; color: #277b59; background: #eef9f4; }
+.calculation-note > span { width: 22px; height: 22px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 50%; color: white; background: #35a879; font-size: 10px; font-weight: 900; }
+.calculation-note p { margin: 0; display: grid; gap: 2px; }
+.calculation-note strong { font-size: 9px; }
+.calculation-note small { color: #668176; font-size: 8px; line-height: 1.35; }
 .primary-button { width: 100%; border: 0; border-radius: 10px; background: var(--blue); color: white; padding: 15px 18px; display: flex; justify-content: center; gap: 12px; font-weight: 800; font-size: 13px; cursor: pointer; box-shadow: 0 9px 18px #3155d92b; }
 .primary-button:disabled { background: #afb7ce; box-shadow: none; cursor: not-allowed; }
 
@@ -155,7 +172,7 @@ input[type=range] { width: 100%; margin: 17px 0 4px; accent-color: var(--blue); 
 .ai-summary b { color: var(--blue); }
 .shift-summary { flex: 0 0 auto; min-width: 190px; background: #fff; border: 1px solid var(--line); border-radius: 13px; padding: 16px 18px; }
 .shift-summary small { display: block; color: var(--muted); font-size: 8px; letter-spacing: .8px; font-weight: 900; margin-bottom: 5px; }
-.shift-summary strong { color: var(--blue); font-family: Georgia, serif; font-size: 28px; }
+.shift-summary strong { display: grid; gap: 4px; color: var(--blue); font-family: Georgia, serif; font-size: 28px; }
 .shift-summary strong span { color: var(--ink); font-family: Arial, sans-serif; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px; }
 .document-preview-card { margin-bottom: 22px; overflow: hidden; background: #e8e9ed; border: 1px solid #d8d9de; border-radius: 17px; box-shadow: 0 13px 36px #232b4308; }
 .document-preview-header { min-height: 68px; padding: 0 20px; display: flex; align-items: center; justify-content: space-between; gap: 18px; background: white; border-bottom: 1px solid #dedfe3; }
@@ -212,6 +229,7 @@ input[type=range] { width: 100%; margin: 17px 0 4px; accent-color: var(--blue); 
 .date-change i { color: var(--orange); font-style: normal; font-weight: 900; }
 .date-change input { min-width: 0; border: 1px solid #ccd3e3; border-radius: 7px; background: #f8f9ff; color: var(--blue); padding: 9px 10px; font-size: 12px; font-weight: 800; outline: none; }
 .date-change input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px #3155d914; }
+.date-change input[readonly] { color: #24795a; background: #eff9f4; border-color: #cce8dc; cursor: default; }
 .date-reason { display: block; margin-top: 9px; color: #787f90; font-size: 9px; line-height: 1.45; }
 .export-card { position: sticky; top: 22px; padding: 25px; text-align: center; }
 .export-icon { width: 45px; height: 45px; margin: 0 auto 13px; display: grid; place-items: center; color: #288460; background: #eaf8f1; border-radius: 50%; font-size: 18px; font-weight: 900; }
