@@ -1,5 +1,6 @@
 import JSZip from "jszip";
 import { formatMoney, parseMoney, type Ledger, type LedgerProjection, type LedgerTransaction } from "./ledger";
+import { openWordDocument } from "./word-text";
 
 const wordNamespace = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
@@ -39,7 +40,10 @@ function summaryAmount(rows: string[][], label: RegExp, currency: string) {
 }
 
 const emptyAmount = /^(?:[-–—]|\s*)$/;
-const transactionDate = /^(?:\d{1,4}\s*[-./– ]\s*[\p{L}\d]{1,9}\s*[-./–, ]\s*\d{1,4}|[\p{L}]{3,9}\s+\d{1,2},?\s+\d{4})$/u;
+
+export function hasTransactionColumns(text: string) {
+  return /\b(?:debits?|withdrawals?|money out)\b[\s\S]{0,45}\b(?:credits?|deposits?|money in)\b[\s\S]{0,45}\bbalance\b/i.test(text);
+}
 
 export function readLedgerXml(xml: string): Ledger {
   const document = new DOMParser().parseFromString(xml, "application/xml");
@@ -64,22 +68,22 @@ export function readLedgerXml(xml: string): Ledger {
         continue;
       }
       if (!columns || row.length !== columns.width || !row.some(Boolean)) continue;
-      if (!transactionDate.test(row[columns.date])) {
-        if (row[columns.date] && !/\b(?:opening|closing|subtotals?|totals?|balance)\b/i.test(row[columns.date])) {
-          throw new Error("A transaction row has an unreadable date. Check the date column before calculating.");
-        }
-        continue;
-      }
       const debitCell = row[columns.debit];
       const creditCell = row[columns.credit];
       const balanceCell = row[columns.balance];
+      if ([debitCell, creditCell, balanceCell].every((cell) => emptyAmount.test(cell))) continue;
+      const date = row[columns.date];
+      const description = row[columns.description] ?? "";
+      if ((!date || !/\d/.test(date)) && /\b(?:opening balance|closing balance|subtotals?|totals?|carried forward|brought forward)\b/i.test(`${date} ${description}`)) continue;
       const debit = emptyAmount.test(debitCell) ? BigInt(0) : parseMoney(debitCell, currency);
       const credit = emptyAmount.test(creditCell) ? BigInt(0) : parseMoney(creditCell, currency);
       const balance = emptyAmount.test(balanceCell) ? null : parseMoney(balanceCell, currency);
-      if (debit === null || debit < 0 || credit === null || credit < 0 || (!emptyAmount.test(balanceCell) && balance === null)) {
-        throw new Error(`Transaction ${transactions.length + 1} has an unreadable amount. Use positive entries in the debit and credit columns.`);
+      if (debit === null || credit === null || (!emptyAmount.test(balanceCell) && balance === null)) {
+        throw new Error(`Transaction ${transactions.length + 1} has an unreadable debit, credit, or balance.`);
       }
-      transactions.push({ date: row[columns.date], description: row[columns.description] ?? "", debit, credit, balance });
+      // The debit column defines outflow even in source files that print debits with a minus sign.
+      const outflow = (debit < 0 ? -debit : debit) + (credit < 0 ? -credit : BigInt(0));
+      transactions.push({ date, description, debit: outflow, credit: credit < 0 ? BigInt(0) : credit, balance });
     }
   }
 
@@ -91,10 +95,8 @@ export function readLedgerXml(xml: string): Ledger {
 }
 
 export async function readLedger(file: File) {
-  const zip = await JSZip.loadAsync(await file.arrayBuffer());
-  const body = zip.file("word/document.xml");
-  if (!body) throw new Error("This file does not contain a readable Word document body.");
-  return readLedgerXml(await body.async("string"));
+  const { xml } = await openWordDocument(file);
+  return readLedgerXml(xml);
 }
 
 function escapeXml(text: string) {
@@ -123,6 +125,6 @@ export async function createLedgerReport(ledger: Ledger, projection: LedgerProje
   zip.file("_rels/.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>');
   zip.file("word/_rels/document.xml.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/></Relationships>');
   zip.file("word/header1.xml", `<w:hdr xmlns:w="${wordNamespace}">${paragraph("DateShift transaction projection", true, "right", 18)}</w:hdr>`);
-  zip.file("word/document.xml", `<w:document xmlns:w="${wordNamespace}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>${paragraph("Transaction projection", true, "left", 36)}${paragraph("Planning scenario based on the selected target and the uploaded transaction list.")}${summary}${table}<w:sectPr><w:headerReference w:type="default" r:id="rId1"/><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1260" w:right="1300" w:bottom="1260" w:left="1300" w:header="630" w:footer="630"/></w:sectPr></w:body></w:document>`);
+  zip.file("word/document.xml", `<w:document xmlns:w="${wordNamespace}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>${paragraph("Transaction projection", true, "left", 36)}${paragraph("Planning scenario based on the selected target and the uploaded transaction list. Parentheses indicate negative balances.")}${summary}${table}<w:sectPr><w:headerReference w:type="default" r:id="rId1"/><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1260" w:right="1300" w:bottom="1260" w:left="1300" w:header="630" w:footer="630"/></w:sectPr></w:body></w:document>`);
   return zip.generateAsync({ type: "blob", compression: "DEFLATE", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
 }

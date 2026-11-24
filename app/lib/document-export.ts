@@ -1,6 +1,7 @@
 import JSZip from "jszip";
 import { degrees, PDFDocument, rgb, StandardFonts } from "pdf-lib";
 import type { DocumentExtraction } from "./document-text";
+import { indexWordText, openWordDocument } from "./word-text";
 
 export type DocumentChange = {
   original: string;
@@ -68,7 +69,7 @@ function ancestorByLocalName(node: Element, localName: string) {
   let current: Element | null = node;
   while (current) {
     if (current.localName === localName || current.nodeName.endsWith(`:${localName}`)) return current;
-    const parent = current.parentElement ?? current.parentNode;
+    const parent: ParentNode | null = current.parentNode;
     current = parent?.nodeType === 1 ? parent as Element : null;
   }
   return null;
@@ -109,7 +110,7 @@ function isoDateForControl(value: string) {
   const numeric = value.match(new RegExp(`^(\\d{1,2})(${separator})(\\d{1,2})(${separator})(\\d{4})$`));
   if (!numeric) return null;
   const separatorCharacter = numeric[2].match(/[-‐‑‒–—−/.]/)?.[0] ?? "/";
-  const dayFirst = !/[/.]/.test(separatorCharacter) || Number(numeric[1]) > 12;
+  const dayFirst = Number(numeric[1]) > 12 || (Number(numeric[3]) <= 12 && !/[/.]/.test(separatorCharacter));
   const day = String(dayFirst ? numeric[1] : numeric[3]).padStart(2, "0");
   const month = String(dayFirst ? numeric[3] : numeric[1]).padStart(2, "0");
   return `${numeric[5]}-${month}-${day}T00:00:00Z`;
@@ -131,51 +132,24 @@ function syncDateContentControl(insertionNode: Element, updatedValue: string) {
 }
 
 export function updateDocumentXml(xml: string, changes: DocumentChange[]) {
-  const parser = new DOMParser();
-  const document = parser.parseFromString(xml, "application/xml");
-  if (document.getElementsByTagName("parsererror").length) throw new Error("This Word document contains XML that could not be edited safely.");
-
-  const queues = new Map<string, DocumentChange[]>();
-  for (const change of [...changes].sort((a, b) => a.sourceIndex - b.sourceIndex)) {
-    const queue = queues.get(change.original) ?? [];
-    queue.push(change);
-    queues.set(change.original, queue);
-  }
-  const consumed = new Map<string, number>();
-  const paragraphs = Array.from(document.getElementsByTagNameNS("*", "p"));
+  const { document, paragraphs, text } = indexWordText(xml);
+  const selected = changes.filter((change) => change.selected).sort((a, b) => a.sourceIndex - b.sourceIndex);
+  let cursor = 0;
   let appliedCount = 0;
 
-  for (const paragraph of paragraphs) {
-    const nodes = Array.from(paragraph.getElementsByTagNameNS("*", "t"));
-    if (!nodes.length) continue;
-    const starts: number[] = [];
-    let paragraphText = "";
-    for (const node of nodes) {
-      starts.push(paragraphText.length);
-      paragraphText += node.textContent ?? "";
-    }
-
-    const replacements: Array<{ start: number; end: number; value: string }> = [];
-    for (const [original, queue] of queues) {
-      let searchFrom = 0;
-      let occurrence = paragraphText.indexOf(original, searchFrom);
-      while (occurrence >= 0) {
-        const queueIndex = consumed.get(original) ?? 0;
-        const change = queue[queueIndex];
-        if (change) {
-          consumed.set(original, queueIndex + 1);
-          if (change.selected) replacements.push({ start: occurrence, end: occurrence + original.length, value: change.updated });
-        }
-        searchFrom = occurrence + original.length;
-        occurrence = paragraphText.indexOf(original, searchFrom);
-      }
-    }
-
-    for (const replacement of replacements.sort((a, b) => b.start - a.start)) {
-      const insertionNode = applyReplacementAcrossNodes(nodes, starts, replacement.start, replacement.end, replacement.value);
+  for (const { start, end, nodes, starts } of paragraphs) {
+    const first = cursor;
+    while (cursor < selected.length && selected[cursor].sourceIndex < end) cursor++;
+    let nextStart = end;
+    for (let index = cursor - 1; index >= first; index--) {
+      const change = selected[index];
+      const changeEnd = change.sourceIndex + change.original.length;
+      if (change.sourceIndex < start || changeEnd > nextStart || !change.original || text.slice(change.sourceIndex, changeEnd) !== change.original) continue;
+      const insertionNode = applyReplacementAcrossNodes(nodes, starts, change.sourceIndex - start, changeEnd - start, change.updated);
       if (insertionNode) {
-        syncDateContentControl(insertionNode, replacement.value);
+        syncDateContentControl(insertionNode, change.updated);
         appliedCount += 1;
+        nextStart = change.sourceIndex;
       }
     }
   }
@@ -184,12 +158,10 @@ export function updateDocumentXml(xml: string, changes: DocumentChange[]) {
 }
 
 async function updateDocx(file: File, changes: DocumentChange[]): Promise<UpdatedDocument> {
-  const zip = await JSZip.loadAsync(await file.arrayBuffer());
-  const documentEntry = zip.file("word/document.xml");
-  if (!documentEntry) throw new Error("This file does not contain a readable Word document body.");
+  const { zip, xml } = await openWordDocument(file);
   const selectedCount = changes.filter((change) => change.selected).length;
-  const update = updateDocumentXml(await documentEntry.async("string"), changes);
-  if (!update.appliedCount) throw new Error("The dates were found, but this Word file stores them in a format that could not be safely updated. No unchanged copy was downloaded.");
+  const update = updateDocumentXml(xml, changes);
+  if (!update.appliedCount) throw new Error("The selected values could not be matched to editable Word text.");
   zip.file("word/document.xml", update.xml);
   const blob = await zip.generateAsync({
     type: "blob",
@@ -202,7 +174,7 @@ async function updateDocx(file: File, changes: DocumentChange[]): Promise<Update
     fileName: updatedName(file.name, "docx"),
     updatedCount: update.appliedCount,
     warning: update.appliedCount < selectedCount
-      ? `${selectedCount - update.appliedCount} selected date${selectedCount - update.appliedCount === 1 ? " was" : "s were"} not stored as editable Word text and remained unchanged.`
+      ? `${selectedCount - update.appliedCount} selected value${selectedCount - update.appliedCount === 1 ? " was" : "s were"} not written into the file.`
       : undefined,
   };
 }
@@ -225,16 +197,43 @@ async function createSampleDocx(text: string, changes: DocumentChange[]): Promis
   return { blob, fileName: "Service_Agreement_2026-updated.docx", updatedCount: changes.filter((change) => change.selected).length };
 }
 
-async function updatePdf(file: File, extraction: DocumentExtraction, changes: DocumentChange[]): Promise<UpdatedDocument> {
+async function updatePdf(file: File, extraction: DocumentExtraction, changes: DocumentChange[], exactFigures: boolean): Promise<UpdatedDocument> {
   const pdf = await PDFDocument.load(await file.arrayBuffer());
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   const pages = pdf.getPages();
   let updatedCount = 0;
   let unmatched = 0;
 
+  const measuredWidth = (value: string) => {
+    try { return font.widthOfTextAtSize(value, 100); }
+    catch { return 55 * value.length; }
+  };
+
   for (const change of changes.filter((item) => item.selected)) {
-    const start = change.sourceIndex;
-    const end = start + change.original.length;
+    let start = change.sourceIndex;
+    let end = start + change.original.length;
+    let updated = change.updated;
+    if (extraction.text.slice(start, end) !== change.original) {
+      unmatched++;
+      continue;
+    }
+    if (change.original === updated) {
+      updatedCount++;
+      continue;
+    }
+    try { font.encodeText(updated); }
+    catch {
+      // Preserve an unchanged currency mark already drawn with the source font.
+      let prefix = 0;
+      let suffix = 0;
+      while (prefix < Math.min(change.original.length, updated.length) && change.original[prefix] === updated[prefix]) prefix++;
+      while (suffix < Math.min(change.original.length, updated.length) - prefix && change.original.at(-suffix - 1) === updated.at(-suffix - 1)) suffix++;
+      start += prefix;
+      end -= suffix;
+      updated = updated.slice(prefix, updated.length - suffix);
+      try { font.encodeText(updated); }
+      catch { unmatched++; continue; }
+    }
     const matchingSpans = extraction.pdfSpans.filter((span) => span.end > start && span.start < end);
     if (!matchingSpans.length) {
       unmatched += 1;
@@ -243,7 +242,8 @@ async function updatePdf(file: File, extraction: DocumentExtraction, changes: Do
     const pageNumber = matchingSpans[0].pageNumber;
     const samePage = matchingSpans.filter((span) => span.pageNumber === pageNumber);
     const page = pages[pageNumber - 1];
-    if (!page) {
+    const baseline = matchingSpans[0].y;
+    if (!page || samePage.length !== matchingSpans.length || (exactFigures && (samePage[0].start > start || samePage.at(-1)!.end < end || samePage.some((span) => Math.abs(span.y - baseline) > 2 || Math.abs(span.rotation) > 1)))) {
       unmatched += 1;
       continue;
     }
@@ -252,9 +252,9 @@ async function updatePdf(file: File, extraction: DocumentExtraction, changes: Do
       const characterCount = Math.max(span.text.length, 1);
       const localStart = Math.max(0, start - span.start);
       const localEnd = Math.min(characterCount, end - span.start);
-      const measuredText = font.widthOfTextAtSize(span.text, 100);
-      const measuredPrefix = font.widthOfTextAtSize(span.text.slice(0, localStart), 100);
-      const measuredMatch = font.widthOfTextAtSize(span.text.slice(localStart, localEnd), 100);
+      const measuredText = measuredWidth(span.text);
+      const measuredPrefix = measuredWidth(span.text.slice(0, localStart));
+      const measuredMatch = measuredWidth(span.text.slice(localStart, localEnd));
       const startRatio = measuredText > 0 ? measuredPrefix / measuredText : localStart / characterCount;
       const widthRatio = measuredText > 0 ? measuredMatch / measuredText : Math.max(localEnd - localStart, 1) / characterCount;
       const radians = span.rotation * Math.PI / 180;
@@ -262,7 +262,7 @@ async function updatePdf(file: File, extraction: DocumentExtraction, changes: Do
       return {
         x: span.x + Math.cos(radians) * advance,
         y: span.y + Math.sin(radians) * advance,
-        width: Math.max(span.width * widthRatio, 4),
+        width: exactFigures ? span.width * widthRatio : Math.max(span.width * widthRatio, 4),
         height: span.height,
         rotation: span.rotation,
         backgroundColor: span.backgroundColor,
@@ -270,42 +270,43 @@ async function updatePdf(file: File, extraction: DocumentExtraction, changes: Do
       };
     });
     const first = fragments[0];
-    const availableWidth = Math.max(fragments.reduce((total, fragment) => total + fragment.width, 0), 8);
+    const availableWidth = Math.max(fragments.reduce((total, fragment) => total + fragment.width, 0), exactFigures ? 0 : 8);
     const height = Math.max(...fragments.map((fragment) => fragment.height));
     let fontSize = Math.max(5, Math.min(height * 0.92, 18));
-    const renderedWidth = font.widthOfTextAtSize(change.updated, fontSize);
+    const renderedWidth = font.widthOfTextAtSize(updated, fontSize);
+    if (exactFigures && renderedWidth * 4.5 / fontSize > availableWidth) { unmatched++; continue; }
     if (renderedWidth > availableWidth) fontSize = Math.max(4.5, fontSize * availableWidth / renderedWidth);
 
     for (const fragment of fragments) {
       const background = fragment.backgroundColor ?? { red: 1, green: 1, blue: 1 };
       page.drawRectangle({
-        x: fragment.x - 1.5,
-        y: fragment.y - 2,
-        width: fragment.width + 3,
-        height: fragment.height + 4,
+        x: fragment.x - (exactFigures ? 0 : 1.5),
+        y: fragment.y - (exactFigures ? 1 : 2),
+        width: fragment.width + (exactFigures ? 0 : 3),
+        height: fragment.height + (exactFigures ? 2 : 4),
         color: rgb(background.red, background.green, background.blue),
         rotate: degrees(fragment.rotation),
       });
     }
     const textColor = first.textColor ?? { red: 0, green: 0, blue: 0 };
-    page.drawText(change.updated, { x: first.x, y: first.y, size: fontSize, font, color: rgb(textColor.red, textColor.green, textColor.blue), rotate: degrees(first.rotation), maxWidth: availableWidth });
+    page.drawText(updated, { x: first.x, y: first.y, size: fontSize, font, color: rgb(textColor.red, textColor.green, textColor.blue), rotate: degrees(first.rotation), maxWidth: availableWidth });
     updatedCount += 1;
   }
 
-  if (!updatedCount) throw new Error("The dates were found, but their positions could not be mapped onto this PDF. No unchanged copy was downloaded.");
+  if (!updatedCount) throw new Error("The selected values could not be safely positioned on this PDF.");
   const bytes = await pdf.save();
   return {
     blob: new Blob([bytes.slice().buffer as ArrayBuffer], { type: "application/pdf" }),
     fileName: updatedName(file.name, "pdf"),
     updatedCount,
-    warning: unmatched ? `${unmatched} selected date${unmatched === 1 ? " could" : "s could"} not be positioned on the PDF page and were left unchanged.` : undefined,
+    warning: unmatched ? `${unmatched} selected value${unmatched === 1 ? " was" : "s were"} not written into the PDF.` : undefined,
   };
 }
 
-export async function createUpdatedDocument(file: File | null, extraction: DocumentExtraction, changes: DocumentChange[]) {
+export async function createUpdatedDocument(file: File | null, extraction: DocumentExtraction, changes: DocumentChange[], exactFigures = false) {
   if (!file) return createSampleDocx(extraction.text, changes);
   if (extraction.kind === "docx") return updateDocx(file, changes);
-  return updatePdf(file, extraction, changes);
+  return updatePdf(file, extraction, changes, exactFigures);
 }
 
 export function downloadUpdatedDocument(result: UpdatedDocument) {

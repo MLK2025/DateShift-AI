@@ -24,7 +24,7 @@ test("detects written-month dates with document and typographic separators", () 
   );
 });
 
-test("detects common year-first and weekday day-first formats without accepting invalid dates", () => {
+test("detects year-first and weekday dates and proposes a correction for a short month", () => {
   const result = findDates(
     "Review Wed, 01 Dec 2025; archive 2025/12/01; ignore 31-Feb-2025.",
     interpretInstruction("Move all dates forward 2 months.", 2, "forward"),
@@ -35,8 +35,23 @@ test("detects common year-first and weekday day-first formats without accepting 
     [
       { original: "Wed, 01 Dec 2025", updated: "Sun, 01 Feb 2026" },
       { original: "2025/12/01", updated: "2026/02/01" },
+      { original: "31-Feb-2025", updated: "28-Apr-2025" },
     ],
   );
+  assert.match(result.dates[0].reason, /Corrected the weekday/);
+  assert.equal(result.dates[2].selected, false);
+  assert.equal(result.needsReview, 1);
+});
+
+test("proposes the only matching month typo and respects the requested backward shift", () => {
+  const plan = interpretInstruction("Move dates back 2 months. Keep dates after signing unchanged.", 3, "forward");
+  const result = findDates("Due 01-Dce-2025. Unknown 32-Feb-2025.", plan);
+  assert.equal(plan.amount, -2);
+  assert.equal(result.dates.length, 1);
+  assert.equal(result.dates[0].updated, "01-Oct-2025");
+  assert.equal(result.dates[0].selected, false);
+  assert.equal(interpretInstruction("Move dates -2 calendar months", 3, "forward").amount, -2);
+  assert.equal(interpretInstruction("Move ahead 3 months. Update the shift to 1 month backward.", 3, "forward").amount, -1);
 });
 
 test("detects and shifts weekday-prefixed month dates while preserving their style", () => {

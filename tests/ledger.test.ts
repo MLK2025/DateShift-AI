@@ -4,7 +4,7 @@ import { dirname } from "node:path";
 import test from "node:test";
 import JSZip from "jszip";
 import { createLedgerReport, readLedgerXml } from "../app/lib/ledger-docx";
-import { parseMoney, projectLedger, reconcileLedger } from "../app/lib/ledger";
+import { formatMoney, parseMoney, projectLedger, reconcileLedger } from "../app/lib/ledger";
 
 const require = createRequire(import.meta.url);
 const mammothDirectory = dirname(require.resolve("mammoth/package.json"));
@@ -77,4 +77,14 @@ test("preserves cent precision with large amounts and accepts negative balances"
   }
   assert.equal(parseMoney("1,000.001"), null);
   assert.equal(parseMoney("USD 1,000.00", "GHS"), null);
+  assert.equal(parseMoney("GHS (1,000.00)", "GHS"), -cents("1000"));
+  assert.equal(parseMoney("1,000.00 DR"), -cents("1000"));
+  assert.equal(formatMoney(-cents("1000")), "(1,000.00)");
+});
+
+test("an undated row and source minus signs do not break cash reconciliation", () => {
+  const ledger = readLedgerXml(statement.replace("03-Jan-2026", "date unreadable").replace(">200.00<", ">-200.00<"));
+  assert.equal(ledger.transactions[1].date, "date unreadable");
+  assert.equal(ledger.transactions[1].debit, cents("200"));
+  assert.equal(reconcileLedger(ledger).closing, cents("1190"));
 });

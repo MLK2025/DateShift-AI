@@ -9,14 +9,14 @@ export type FigureChange = {
   reason: string;
   confidence: number;
   selected: boolean;
-  amountMinor: number;
+  amountMinor: bigint;
 };
 
 export type FigureCalculation = {
   strategy: FigureStrategy;
   precision: number;
-  currentUnits: number;
-  targetUnits: number;
+  currentUnits: bigint;
+  targetUnits: bigint;
   currentDisplay: string;
   targetDisplay: string;
   summary: string;
@@ -24,18 +24,22 @@ export type FigureCalculation = {
 
 const currencyCode = "(?:GHS|USD|EUR|GBP|NGN|CAD|AUD|ZAR|KES|JPY|CHF)";
 const currencyToken = `(?:${currencyCode}|[$€£₵₦¥])`;
-const amountNumber = "\\(?-?(?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:\\.\\d{1,4})?\\)?";
-const amountSource = `(?<![\\w])(?:${currencyToken}\\s*)?${amountNumber}(?:\\s*${currencyCode})?(?![\\w%])`;
-const moneyContext = /\b(?:cash|amount|price|cost|subtotal|total|balance|payment|fee|budget|revenue|expense|salary|income|figure|value|debit|credit|net|gross)\b/i;
+const digitsPattern = "(?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:\\.\\d{1,4})?";
+const amountLabel = `([-−]?)(${currencyToken}?[ \\t]*)(\\(?[-−]?)(${digitsPattern})(\\)?)([ \\t]*${currencyCode})?`;
+const amountSource = `(?<![\\w.,/−-])(?:[-−]?${currencyToken}[ \\t]*)?\\(?[-−]?${digitsPattern}\\)?(?:[ \\t]*${currencyCode})?(?![\\w/−-]|[.,]\\d|[ \\t]*%)`;
+const cashLabel = /\b(?:cash(?:\s+(?:transaction|allocation|withdrawal|deposit|amount|payment|received|paid))?|(?:transaction |payment |invoice )?amount|price|cost|payment|paid|fee|reserve|budget|revenue|expense|salary|income|debit|credit|deposit|withdrawal)\s*[:=]?\s*$/i;
+const nonCashLabel = /\b(?:(?:account|acct\.?|reference|routing|transaction|customer|invoice|receipt|cheque|check|tax|order|serial|phone|policy|document|product|p\.o\.?)\s*(?:number|no\.?|id|code|ref(?:erence)?|#)|ref(?:erence)?|i\.?d\.?|account|routing|iban|swift|phone|qty|quantity|page|version|year|date|rate|percentage|percent|(?:sub)?total(?:\s+(?:debits?|credits?|cash|payments?))?|unit price|unit cost|denomination|balance(?:\s+(?:brought|carried) forward)?)\s*[:=#.]?\s*$/i;
+const zero = BigInt(0);
+const one = BigInt(1);
+const ten = BigInt(10);
 
 type ParsedAmount = {
-  value: number;
+  units: bigint;
   decimals: number;
   prefix: string;
   suffix: string;
   grouping: boolean;
-  parentheses: boolean;
-  hasCurrency: boolean;
+  currency: string;
 };
 
 function contextAround(text: string, index: number, length: number) {
@@ -46,37 +50,34 @@ function contextAround(text: string, index: number, length: number) {
 }
 
 function parseAmountLabel(label: string): ParsedAmount | null {
-  const number = label.match(/\(?-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,4})?\)?/);
-  if (!number || number.index === undefined) return null;
-  const raw = number[0];
-  const negative = raw.includes("-") || (raw.startsWith("(") && raw.endsWith(")"));
-  const normalized = raw.replace(/[(),-]/g, "");
-  const value = Number(normalized);
-  if (!Number.isFinite(value) || value > 1_000_000_000_000) return null;
-  const decimalPart = normalized.split(".")[1] ?? "";
+  const amount = label.trim().match(new RegExp(`^${amountLabel}$`, "i"));
+  if (!amount) return null;
+  const [, outerSign, prefix, innerSign, digits, closing, suffix = ""] = amount;
+  if (innerSign.startsWith("(") !== Boolean(closing) || (outerSign && innerSign) || innerSign.length > 1) return null;
+  const [whole, decimalPart = ""] = digits.replace(/,/g, "").split(".");
+  if (whole.length > 18) return null;
+  const token = (prefix.trim() || suffix.trim()).toUpperCase();
+  const currency = ({ "₵": "GHS", "$": "USD", "€": "EUR", "£": "GBP", "₦": "NGN", "¥": "JPY" } as Record<string, string>)[token] ?? token;
   return {
-    value: negative ? -value : value,
+    units: BigInt(whole + decimalPart) * (outerSign || innerSign ? -one : one),
     decimals: decimalPart.length,
-    prefix: label.slice(0, number.index),
-    suffix: label.slice(number.index + raw.length),
-    grouping: raw.includes(","),
-    parentheses: raw.startsWith("(") && raw.endsWith(")"),
-    hasCurrency: new RegExp(currencyToken, "i").test(label),
+    prefix,
+    suffix,
+    grouping: digits.includes(","),
+    currency,
   };
 }
 
-function formatMinorLike(units: number, precision: number, template: string) {
+function formatMinorLike(units: bigint, precision: number, template: string) {
   const parsed = parseAmountLabel(template);
-  if (!parsed) return String(units / 10 ** precision);
-  const scale = 10 ** precision;
-  const absolute = Math.abs(units) / scale;
-  let number = absolute.toFixed(precision);
-  if (parsed.grouping) {
-    const [whole, decimal] = number.split(".");
-    number = `${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}${decimal === undefined ? "" : `.${decimal}`}`;
-  }
-  if (units < 0) number = parsed.parentheses ? `(${number})` : `-${number}`;
-  return `${parsed.prefix}${number}${parsed.suffix}`;
+  const absolute = units < zero ? -units : units;
+  const figures = String(absolute).padStart(precision + 1, "0");
+  const whole = precision ? figures.slice(0, -precision) : figures;
+  const decimal = precision ? `.${figures.slice(-precision)}` : "";
+  let number = whole + decimal;
+  if (parsed?.grouping) number = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",") + decimal;
+  if (units < zero) number = `(${number})`;
+  return `${parsed?.prefix ?? ""}${number}${parsed?.suffix ?? ""}`;
 }
 
 function dateRanges(text: string) {
@@ -92,45 +93,46 @@ function dateRanges(text: string) {
   return patterns.flatMap((pattern) => [...text.matchAll(pattern)].map((match) => ({ start: match.index ?? 0, end: (match.index ?? 0) + match[0].length })));
 }
 
-function rebalanceUnits(values: number[], target: number, strategy: FigureStrategy) {
+function sumUnits(values: bigint[]) {
+  return values.reduce((sum, value) => sum + value, zero);
+}
+
+function rebalanceUnits(values: bigint[], target: bigint, strategy: FigureStrategy) {
   if (!values.length) return [];
-  const current = values.reduce((sum, value) => sum + value, 0);
+  const current = sumUnits(values);
   if (strategy === "last") {
     const result = [...values];
     result[result.length - 1] += target - current;
     return result;
   }
-  if (strategy === "equal" || current === 0) {
+  if (strategy === "equal" || current === zero) {
     const difference = target - current;
-    const base = Math.trunc(difference / values.length);
-    let remainder = difference - base * values.length;
+    const count = BigInt(values.length);
+    const base = difference / count;
+    let remainder = difference % count;
     return values.map((value) => {
-      const extra = remainder === 0 ? 0 : remainder > 0 ? 1 : -1;
+      const extra = remainder === zero ? zero : remainder > zero ? one : -one;
       remainder -= extra;
       return value + base + extra;
     });
   }
 
-  const raw = values.map((value) => value * target / current);
-  const result = raw.map((value) => Math.trunc(value));
-  let remainder = target - result.reduce((sum, value) => sum + value, 0);
-  const order = raw.map((value, index) => ({ index, fraction: value - result[index] }))
-    .sort((first, second) => remainder > 0 ? second.fraction - first.fraction : first.fraction - second.fraction);
-  let cursor = 0;
-  while (remainder !== 0) {
-    const step = remainder > 0 ? 1 : -1;
-    result[order[cursor % order.length].index] += step;
-    remainder -= step;
-    cursor += 1;
-  }
+  const denominator = current < zero ? -current : current;
+  const numerators = values.map((value) => value * target * (current < zero ? -one : one));
+  const result = numerators.map((numerator) => numerator / denominator);
+  const remainder = target - sumUnits(result);
+  const step = remainder > zero ? one : -one;
+  const order = numerators.map((numerator, index) => ({ index, weight: (numerator % denominator) * step }))
+    .sort((first, second) => first.weight === second.weight ? first.index - second.index : first.weight > second.weight ? -1 : 1);
+  for (const { index } of order.slice(0, Number(remainder * step))) result[index] += step;
   return result;
 }
 
 function strategyFromInstruction(instruction: string, fallback: FigureStrategy) {
-  const normalized = instruction.toLowerCase();
-  if (/\b(?:last|final|single|one)\b/.test(normalized) || /total\s+(?:line|figure)\s+only/.test(normalized)) return "last";
-  if (/\b(?:equal|equally|evenly|same amount)\b/.test(normalized)) return "equal";
-  if (/\bproportion(?:al|ally)?\b/.test(normalized)) return "proportional";
+  const match = [...instruction.toLowerCase().matchAll(/\b(?:(?:last|final)\s+(?:figure|amount|transaction)|total\s+(?:line|figure)\s+only|equal(?:ly)?|evenly|same amount|proportion(?:al|ally)?)\b/g)].at(-1)?.[0];
+  if (match?.startsWith("proportion")) return "proportional";
+  if (match && /^(?:last|final|total)/.test(match)) return "last";
+  if (match) return "equal";
   return fallback;
 }
 
@@ -141,7 +143,7 @@ function strategyLabel(strategy: FigureStrategy) {
 }
 
 export function rebalanceFigureChanges(changes: FigureChange[], calculation: FigureCalculation) {
-  const fixedUnits = changes.filter((change) => !change.selected).reduce((sum, change) => sum + change.amountMinor, 0);
+  const fixedUnits = sumUnits(changes.filter((change) => !change.selected).map((change) => change.amountMinor));
   const selected = changes.filter((change) => change.selected);
   if (!selected.length) return changes.map((change) => ({ ...change, updated: change.original }));
   const balanced = rebalanceUnits(selected.map((change) => change.amountMinor), calculation.targetUnits - fixedUnits, calculation.strategy);
@@ -157,12 +159,15 @@ export function rebalanceFigureChanges(changes: FigureChange[], calculation: Fig
   });
 }
 
-export function findFigures(text: string, instruction: string, fallbackTarget: string, fallbackStrategy: FigureStrategy) {
-  const instructionAmounts = [...instruction.matchAll(new RegExp(amountSource, "gi"))]
-    .map((match) => ({ label: match[0], parsed: parseAmountLabel(match[0]) }))
-    .filter((item): item is { label: string; parsed: ParsedAmount } => Boolean(item.parsed));
+export function readFigureTarget(instruction: string, fallbackTarget: string) {
+  const instructionTarget = Array.from(instruction.matchAll(new RegExp(`\\b(?:total(?:\\s+of|\\s+to)?|target(?:\\s+of)?|reach|to|use)\\s*[:=]?\\s+(${amountSource})`, "gi"))).at(-1)?.[1];
+  const instructionParsed = instructionTarget ? parseAmountLabel(instructionTarget) : null;
   const fallbackParsed = parseAmountLabel(fallbackTarget.trim());
-  const target = instructionAmounts.at(-1) ?? (fallbackParsed ? { label: fallbackTarget.trim(), parsed: fallbackParsed } : null);
+  return instructionParsed && instructionTarget ? { label: instructionTarget, parsed: instructionParsed } : fallbackParsed ? { label: fallbackTarget.trim(), parsed: fallbackParsed } : null;
+}
+
+export function findFigures(text: string, instruction: string, fallbackTarget: string, fallbackStrategy: FigureStrategy) {
+  const target = readFigureTarget(instruction, fallbackTarget);
   if (!target) throw new Error("Add the exact target total, for example: Make the cash figures total GHS 50,000.00.");
 
   const ranges = dateRanges(text);
@@ -174,10 +179,9 @@ export function findFigures(text: string, instruction: string, fallbackTarget: s
     const parsed = parseAmountLabel(original);
     if (!parsed) return [];
     const context = contextAround(text, sourceIndex, original.length);
-    const digits = original.replace(/\D/g, "");
-    const plainInteger = !parsed.hasCurrency && !/[,.]/.test(original);
-    if (plainInteger && parsed.value >= 1900 && parsed.value <= 2100) return [];
-    if (plainInteger && (digits.length <= 2 || digits.length >= 10) && !moneyContext.test(context)) return [];
+    const lineStart = text.lastIndexOf("\n", sourceIndex - 1) + 1;
+    const preceding = text.slice(Math.max(lineStart, sourceIndex - 70), sourceIndex);
+    if (nonCashLabel.test(preceding) || (!parsed.currency && !cashLabel.test(preceding))) return [];
     return [{ original, sourceIndex, context, parsed }];
   });
 
@@ -190,9 +194,11 @@ export function findFigures(text: string, instruction: string, fallbackTarget: s
     };
   }
 
-  const precision = Math.min(4, Math.max(target.parsed.decimals, ...candidates.map((candidate) => candidate.parsed.decimals)));
-  const scale = 10 ** precision;
-  const targetUnits = Math.round(target.parsed.value * scale);
+  const currencies = new Set([target.parsed.currency, ...candidates.map((candidate) => candidate.parsed.currency)].filter(Boolean));
+  if (currencies.size > 1) throw new Error("The figures include different currencies. Use a single currency for each target total.");
+  const precision = candidates.reduce((maximum, candidate) => Math.max(maximum, candidate.parsed.decimals), target.parsed.decimals);
+  const toUnits = (parsed: ParsedAmount) => parsed.units * ten ** BigInt(precision - parsed.decimals);
+  const targetUnits = toUnits(target.parsed);
   const rawChanges: FigureChange[] = candidates.map((candidate, index) => ({
     id: index + 1,
     sourceIndex: candidate.sourceIndex,
@@ -200,13 +206,13 @@ export function findFigures(text: string, instruction: string, fallbackTarget: s
     updated: candidate.original,
     context: candidate.context,
     reason: "Ready for exact recalculation.",
-    confidence: candidate.parsed.hasCurrency || /[,.]/.test(candidate.original) || moneyContext.test(candidate.context) ? 98 : 84,
+    confidence: candidate.parsed.currency ? 98 : 90,
     selected: true,
-    amountMinor: Math.round(candidate.parsed.value * scale),
+    amountMinor: toUnits(candidate.parsed),
   }));
-  const currentUnits = rawChanges.reduce((sum, change) => sum + change.amountMinor, 0);
+  const currentUnits = sumUnits(rawChanges.map((change) => change.amountMinor));
   const strategy = strategyFromInstruction(instruction, fallbackStrategy);
-  const displayTemplate = target.parsed.hasCurrency ? target.label : rawChanges.find((change) => parseAmountLabel(change.original)?.hasCurrency)?.original ?? target.label;
+  const displayTemplate = target.parsed.currency ? target.label : candidates.find((candidate) => candidate.parsed.currency)?.original ?? target.label;
   const currentDisplay = formatMinorLike(currentUnits, precision, displayTemplate);
   const targetDisplay = formatMinorLike(targetUnits, precision, displayTemplate);
   const calculation: FigureCalculation = {

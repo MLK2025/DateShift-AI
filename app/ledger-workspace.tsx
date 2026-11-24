@@ -11,11 +11,13 @@ const sampleLedger: Ledger = {
   ],
 };
 
-export function LedgerWorkspace() {
-  const [source, setSource] = useState<{ name: string; ledger: Ledger } | null>(null);
+export type LedgerSource = { name: string; ledger: Ledger; target?: string };
+
+export function LedgerWorkspace({ initialSource = null }: { initialSource?: LedgerSource | null }) {
+  const [source, setSource] = useState<LedgerSource | null>(initialSource);
   const [openingMode, setOpeningMode] = useState<"calculated" | "fixed">("calculated");
-  const [opening, setOpening] = useState("");
-  const [closing, setClosing] = useState("");
+  const [opening, setOpening] = useState(() => initialSource ? formatMoney(initialSource.ledger.opening) : "");
+  const [closing, setClosing] = useState(() => initialSource?.target ?? (initialSource ? formatMoney(reconcileLedger(initialSource.ledger).closing) : ""));
   const [method, setMethod] = useState<LedgerMethod>("spread");
   const [reading, setReading] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -32,7 +34,7 @@ export function LedgerWorkspace() {
   function loadSource(name: string, next: Ledger) {
     setSource({ name, ledger: next });
     setOpening(formatMoney(next.opening));
-    setClosing(formatMoney(next.reportedClosing ?? reconcileLedger(next).closing));
+    setClosing(formatMoney(reconcileLedger(next).closing));
     setError("");
   }
 
@@ -117,7 +119,7 @@ export function LedgerWorkspace() {
       {projection && ledger && (
         <article className="panel ledger-panel ledger-result">
           <div className="ledger-result-heading">
-            <div><h2>Transaction projection</h2><p>Each running balance adds the row’s credit and subtracts its debit. The final row equals the target closing balance.</p></div>
+            <div><h2>Transaction projection</h2><p>Each running balance adds the row’s credit and subtracts its debit. The final row equals the target closing balance. Parentheses indicate a negative balance.</p></div>
             <button className="primary-button" disabled={busy} onClick={() => void download()}>{exporting ? "Preparing report…" : "Download Word report"}</button>
           </div>
           <dl className="ledger-totals">

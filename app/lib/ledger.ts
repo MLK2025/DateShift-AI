@@ -21,21 +21,23 @@ const minorUnits = BigInt(100);
 
 export function parseMoney(value: string, currency = "") {
   const normalized = value.trim().replace(/\u2212/g, "-").replace(/\u00a0/g, " ");
-  const match = normalized.match(/^(-|\()?\s*([₵$€£]|[A-Z]{3})?\s*(-)?((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)\s*(\))?$/i);
-  if (!match || (match[1] === "(") !== Boolean(match[5]) || (match[1] && match[3])) return null;
+  const match = normalized.match(/^([-+]|\()?\s*([₵$€£]|[A-Z]{3})?\s*([-+]|\()?((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)\s*(\))?\s*(DR|CR)?$/i);
+  if (!match || ((match[1] || match[3]) === "(") !== Boolean(match[5]) || (match[1] && match[3])) return null;
   const symbol = match[2]?.toUpperCase();
   const code = symbol ? ({ "₵": "GHS", "$": "USD", "€": "EUR", "£": "GBP" }[symbol] ?? symbol) : "";
   if (currency && code && currency !== code) return null;
   const [whole, fractional = ""] = match[4].replace(/,/g, "").split(".");
   if (whole.length > 18) return null;
   const cents = BigInt(whole) * minorUnits + BigInt(fractional.padEnd(2, "0"));
-  return match[1] || match[3] ? -cents : cents;
+  const sign = match[1] || match[3];
+  return sign === "-" || sign === "(" || match[6]?.toUpperCase() === "DR" ? -cents : cents;
 }
 
 export function formatMoney(amount: bigint) {
   const absolute = amount < zero ? -amount : amount;
   const whole = String(absolute / minorUnits).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-  return `${amount < zero ? "-" : ""}${whole}.${String(absolute % minorUnits).padStart(2, "0")}`;
+  const value = `${whole}.${String(absolute % minorUnits).padStart(2, "0")}`;
+  return amount < zero ? `(${value})` : value;
 }
 
 export function reconcileLedger(ledger: Ledger) {

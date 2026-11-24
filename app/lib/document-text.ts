@@ -98,11 +98,11 @@ function extensionOf(name: string) {
 }
 
 async function readDocx(file: File): Promise<DocumentExtraction> {
-  const mammoth = await import("mammoth");
-  const result = await mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() });
+  const { indexWordText, openWordDocument } = await import("./word-text");
+  const { xml } = await openWordDocument(file);
   return {
     kind: "docx",
-    text: result.value.replace(/\u00a0/g, " ").replace(/\n{3,}/g, "\n\n").trim(),
+    text: indexWordText(xml).text,
     pdfSpans: [],
   };
 }

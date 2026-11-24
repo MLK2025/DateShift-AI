@@ -6,6 +6,8 @@ import test from "node:test";
 import JSZip from "jszip";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { createUpdatedDocument, type DocumentChange } from "../app/lib/document-export";
+import { extractDocument } from "../app/lib/document-text";
+import { findFigures } from "../app/lib/figure-engine";
 
 const require = createRequire(import.meta.url);
 const mammothRoot = dirname(require.resolve("mammoth/package.json"));
@@ -138,4 +140,18 @@ test("writes a selected date over the correct substring in a PDF text span", asy
   const updatedBytes = new Uint8Array(await result.blob.arrayBuffer());
   assert.ok(updatedBytes.length > original.length);
   await writeFile(`${outputDir}/date-table-updated.pdf`, updatedBytes);
+});
+
+test("updates only the selected cash occurrence when Word repeats the same figure in references", async () => {
+  const zip = new JSZip();
+  const input = `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Account No: 100.00</w:t></w:r></w:p><w:p><w:r><w:t>Cash paid: </w:t><w:t>100</w:t></w:r><w:r><w:t>.00</w:t></w:r><w:r><w:tab/><w:t>Ref: 100.00</w:t></w:r></w:p><w:p><w:r><w:t>01-Dec-2025</w:t></w:r></w:p></w:body></w:document>`;
+  zip.file("word/document.xml", input);
+  const file = new File([await zip.generateAsync({ type: "arraybuffer" })], "cash.docx");
+  const extraction = await extractDocument(file);
+  const { changes } = findFigures(extraction.text, "Make the total 175.00", "", "proportional");
+  assert.deepEqual(changes.map(({ original }) => original), ["100.00"]);
+  const output = await createUpdatedDocument(file, extraction, changes, true);
+  const result = await extractDocument(new File([output.blob], "cash-updated.docx"));
+  assert.equal(output.updatedCount, 1);
+  assert.equal(result.text, "Account No: 100.00\nCash paid: 175.00\tRef: 100.00\n01-Dec-2025");
 });

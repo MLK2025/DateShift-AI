@@ -3,8 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { extractDocument, type DocumentExtraction } from "./lib/document-text";
 import type { UpdatedDocument } from "./lib/document-export";
-import { findFigures, rebalanceFigureChanges, type FigureCalculation, type FigureChange, type FigureStrategy } from "./lib/figure-engine";
-import { LedgerWorkspace } from "./ledger-workspace";
+import { findFigures, readFigureTarget, rebalanceFigureChanges, type FigureCalculation, type FigureChange, type FigureStrategy } from "./lib/figure-engine";
+import { LedgerWorkspace, type LedgerSource } from "./ledger-workspace";
 
 export const dynamic = "force-static";
 
@@ -23,7 +23,7 @@ type DateMatch = {
 };
 
 function isFigureChange(change: DateMatch | FigureChange): change is FigureChange {
-  return "amountMinor" in change && typeof change.amountMinor === "number";
+  return "amountMinor" in change && typeof change.amountMinor === "bigint";
 }
 
 export type InstructionPlan = {
@@ -88,13 +88,15 @@ function matchCase(value: string, template: string) {
 }
 
 function monthForTemplate(month: number, template: string) {
-  const value = template.length <= 4 ? monthsFull[month].slice(0, 3) : monthsFull[month];
+  const abbreviated = template.length <= 3 || /^sept$/i.test(template);
+  const value = abbreviated ? monthsFull[month].slice(0, 3) : monthsFull[month];
   return matchCase(value, template);
 }
 
 function shiftValidParts(year: number, month: number, day: number, amount: number, preserveMonthEnd: boolean) {
-  if (!Number.isInteger(year) || year < 1000 || year > 9999 || !Number.isInteger(month) || month < 0 || month > 11 || !Number.isInteger(day) || day < 1 || day > daysInMonth(year, month)) return null;
-  return shiftParts(year, month, day, amount, preserveMonthEnd);
+  if (!Number.isInteger(year) || year < 1000 || year > 9999 || !Number.isInteger(month) || month < 0 || month > 11 || !Number.isInteger(day) || day < 1 || day > 31) return null;
+  const shifted = shiftParts(year, month, Math.min(day, daysInMonth(year, month)), amount, preserveMonthEnd);
+  return shifted.year >= 1000 && shifted.year <= 9999 ? shifted : null;
 }
 
 function weekdayForDate(year: number, month: number, day: number, template: string) {
@@ -192,8 +194,9 @@ export function shiftDateLabel(value: string, amount: number, preserveMonthEnd =
   const numeric = value.match(new RegExp(`^(\\d{1,2})(${flexibleDateSeparator})(\\d{1,2})(${flexibleDateSeparator})(\\d{4})$`));
   if (numeric) {
     const first = Number(numeric[1]);
+    const second = Number(numeric[3]);
     const separatorCharacter = numeric[2].match(/[-‐‑‒–—−/.]/)?.[0] ?? "/";
-    const dayFirstFormat = !/[/.]/.test(separatorCharacter) || first > 12;
+    const dayFirstFormat = first > 12 || (second <= 12 && !/[/.]/.test(separatorCharacter));
     const rawDay = dayFirstFormat ? numeric[1] : numeric[3];
     const rawMonth = dayFirstFormat ? numeric[3] : numeric[1];
     const shifted = shiftValidParts(Number(numeric[5]), Number(rawMonth) - 1, Number(rawDay), amount, preserveMonthEnd);
@@ -207,14 +210,22 @@ export function shiftDateLabel(value: string, amount: number, preserveMonthEnd =
 
 export function interpretInstruction(instruction: string, defaultMonths: number, defaultDirection: Direction): InstructionPlan {
   const normalized = instruction.toLowerCase().replace(/[’']/g, "'");
-  const numberMatch = normalized.match(/\b(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty(?:-(?:one|two|three|four))?)\s*(?:calendar\s+)?months?\b/);
+  const durationPattern = /(?<!\w)([-+−]?\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty(?:-(?:one|two|three|four))?)\s*(?:calendar\s+)?months?\b/g;
+  const numberMatch = Array.from(normalized.matchAll(durationPattern)).at(-1);
   const rawNumber = numberMatch?.[1];
-  const parsedMonths = rawNumber ? (Number(rawNumber) || numberWords[rawNumber] || defaultMonths) : defaultMonths;
+  const parsedMonths = rawNumber ? (Math.abs(Number(rawNumber.replace("−", "-"))) || numberWords[rawNumber] || defaultMonths) : defaultMonths;
   const months = Math.max(1, Math.min(24, parsedMonths));
 
   let direction = defaultDirection;
-  if (/\b(back|backward|earlier|before|subtract|minus|previous|prior)\b/.test(normalized)) direction = "backward";
-  if (/\b(forward|later|after|add|plus|ahead|future)\b/.test(normalized)) direction = "forward";
+  const durationIndex = numberMatch?.index ?? 0;
+  const clauseStart = Math.max(normalized.lastIndexOf(".", durationIndex) + 1, normalized.lastIndexOf(";", durationIndex) + 1);
+  const nearDuration = numberMatch ? normalized.slice(Math.max(clauseStart, durationIndex - 36), durationIndex + numberMatch[0].length + 24).split(/[.;\n]/, 1)[0] : normalized;
+  const requestedDirection = nearDuration.match(/\b(backwards?|back|earlier|subtract|minus|forward|later|add|plus|ahead)\b/);
+  if (requestedDirection) direction = /^(back|earlier|subtract|minus)/.test(requestedDirection[0]) ? "backward" : "forward";
+  else if (/\b(?:before|previous|prior)\b/.test(nearDuration)) direction = "backward";
+  else if (/\bafter\b/.test(nearDuration)) direction = "forward";
+  if (rawNumber && /^[-−]/.test(rawNumber)) direction = "backward";
+  if (rawNumber?.startsWith("+")) direction = "forward";
 
   const contextTerms: Array<{ test: RegExp; terms: string[]; label: string }> = [
     { test: /sign(?:ed|ature|ing)?/, terms: ["sign", "signature", "signed"], label: "signature dates" },
@@ -317,6 +328,26 @@ function DocxDocumentPreview({ blob }: { blob: Blob }) {
   );
 }
 
+function isSingleEdit(value: string, known: string) {
+  if (Math.abs(value.length - known.length) > 1) return false;
+  let index = 0;
+  while (value[index] !== undefined && value[index] === known[index]) index++;
+  if (known.length > value.length) return value.slice(index) === known.slice(index + 1);
+  if (value.length > known.length) return value.slice(index + 1) === known.slice(index);
+  return value.slice(index + 1) === known.slice(index + 1) ||
+    (value[index] === known[index + 1] && value[index + 1] === known[index] && value.slice(index + 2) === known.slice(index + 2));
+}
+
+const possibleMonthTypo = new RegExp(`\\b\\d{1,2}${flexibleDateSeparator}([a-z]{3,10})${flexibleDateSeparator}\\d{4}\\b`, "gi");
+
+function correctNamedMonth(value: string) {
+  const token = Array.from(value.matchAll(possibleMonthTypo))[0]?.[1];
+  if (!token || monthLookup[token.toLowerCase()] !== undefined || /^sept$/i.test(token)) return null;
+  const candidates = monthsFull.filter((name) => isSingleEdit(token.toLowerCase(), name.toLowerCase()) || isSingleEdit(token.toLowerCase(), name.slice(0, 3).toLowerCase()));
+  if (candidates.length !== 1) return null;
+  return value.replace(token, matchCase(token.length <= 4 ? candidates[0].slice(0, 3) : candidates[0], token));
+}
+
 export function findDates(text: string, plan: InstructionPlan) {
   const clockTime = "\\d{2}:\\d{2}(?::\\d{2})?";
   const timezone = "(?:GMT|UTC)(?:[+-]\\d{4})?";
@@ -330,6 +361,7 @@ export function findDates(text: string, plan: InstructionPlan) {
     new RegExp(`\\b\\d{4}${flexibleDateSeparator}${monthPattern}${flexibleDateSeparator}\\d{1,2}\\b`, "gi"),
     new RegExp(`\\b\\d{4}${flexibleDateSeparator}\\d{1,2}${flexibleDateSeparator}\\d{1,2}\\b`, "g"),
     new RegExp(`\\b\\d{1,2}${flexibleDateSeparator}\\d{1,2}${flexibleDateSeparator}\\d{4}\\b`, "g"),
+    possibleMonthTypo,
   ];
   const hits: Array<{ value: string; index: number }> = [];
   patterns.forEach((pattern) => {
@@ -337,34 +369,46 @@ export function findDates(text: string, plan: InstructionPlan) {
   });
 
   let skipped = 0;
+  let needsReview = 0;
+  let previousEnd = -1;
   const dates = hits
     .sort((a, b) => a.index - b.index || b.value.length - a.value.length)
-    .filter((hit, index, list) => !list.slice(0, index).some((earlier) => hit.index < earlier.index + earlier.value.length))
     .flatMap((hit) => {
+      if (hit.index < previousEnd || hit.value.includes("\n")) return [];
+      const correctedMonth = correctNamedMonth(hit.value);
+      const source = correctedMonth ?? hit.value;
+      const updated = shiftDateLabel(source, plan.amount, plan.preserveMonthEnd);
+      if (updated === source) return [];
+      previousEnd = hit.index + hit.value.length;
+      const normalizedDate = shiftDateLabel(source, 0);
+      const correctedDay = source.match(/\d+/g)?.map(Number).join("/") !== normalizedDate.match(/\d+/g)?.map(Number).join("/");
+      const weekday = source.match(new RegExp(`^${weekdayPattern}\\b`, "i"))?.[0];
+      const correctedWeekday = weekday && !normalizedDate.toLowerCase().startsWith(weekday.slice(0, 3).toLowerCase());
       const context = contextAround(text, hit.index, hit.value.length);
       const normalizedContext = context.toLowerCase();
       const isExcluded = plan.excludeTerms.some((term) => normalizedContext.includes(term));
       const isIncluded = !plan.includeTerms.length || plan.includeTerms.some((term) => normalizedContext.includes(term));
-      const updated = shiftDateLabel(hit.value, plan.amount, plan.preserveMonthEnd);
-      if (updated === hit.value) return [];
-      const shouldUpdate = !isExcluded && isIncluded;
-      if (!shouldUpdate) skipped += 1;
+      const matchesInstruction = !isExcluded && isIncluded;
+      const correction = correctedMonth || correctedDay;
+      const shouldUpdate = matchesInstruction && !correction;
+      if (!matchesInstruction) skipped += 1;
+      else if (correction) needsReview += 1;
       return [{
         id: 0,
         sourceIndex: hit.index,
         original: hit.value,
         updated,
         context,
-        reason: shouldUpdate
-          ? `Moved ${plan.direction} ${plan.months} month${plan.months === 1 ? "" : "s"}${plan.preserveMonthEnd ? " with month-end preservation" : ""}.`
-          : "Left unchanged because it does not match the instruction.",
-        confidence: /[A-Za-z]/.test(hit.value) || /^\d{4}-/.test(hit.value) ? 99 : 94,
+        reason: !matchesInstruction ? "Left unchanged because it does not match the instruction."
+          : correction ? `Review this proposed correction. Interpreted the source as ${normalizedDate} before shifting.`
+          : `Moved ${plan.direction} ${plan.months} month${plan.months === 1 ? "" : "s"}.${correctedWeekday ? " Corrected the weekday using the calendar date." : ""}`,
+        confidence: correction ? 70 : /[A-Za-z]/.test(hit.value) || /^\d{4}-/.test(hit.value) ? 99 : 94,
         selected: shouldUpdate,
       }];
     })
     .map((date, index) => ({ ...date, id: index + 1 }));
 
-  return { dates, skipped };
+  return { dates, skipped, needsReview };
 }
 
 export default function Home() {
@@ -378,6 +422,7 @@ export default function Home() {
   const [targetTotal, setTargetTotal] = useState("");
   const [figureStrategy, setFigureStrategy] = useState<FigureStrategy>("proportional");
   const [figureCalculation, setFigureCalculation] = useState<FigureCalculation | null>(null);
+  const [ledgerSource, setLedgerSource] = useState<LedgerSource | null>(null);
   const [instruction, setInstruction] = useState("");
   const [refinement, setRefinement] = useState("");
   const [view, setView] = useState<View>("upload");
@@ -436,8 +481,11 @@ export default function Home() {
     const timer = window.setTimeout(async () => {
       try {
         const { createUpdatedDocument } = await import("./lib/document-export");
-        const result = await createUpdatedDocument(file, extraction, dates);
+        const result = await createUpdatedDocument(file, extraction, dates, task === "figures");
         if (cancelled) return;
+        if (task === "figures" && result.updatedCount !== selectedCount) {
+          throw new Error("Some selected amounts could not be written. The exact target could not be verified in the export.");
+        }
 
         const url = URL.createObjectURL(result.blob);
         previewUrlRef.current = url;
@@ -455,7 +503,7 @@ export default function Home() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [dates, extraction, file, selectedCount, view]);
+  }, [dates, extraction, file, selectedCount, task, view]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   function acceptFile(nextFile: File) {
@@ -517,23 +565,40 @@ export default function Home() {
       }
 
       if (task === "figures") {
+        if (file) {
+          const { hasTransactionColumns, readLedger } = await import("./lib/ledger-docx");
+          if (hasTransactionColumns(text)) {
+            if (currentExtraction.kind !== "docx") throw new Error("This PDF contains debit, credit, and balance columns. Save it as Word (.docx) and use Transactions to calculate the running balances.");
+            const ledger = await readLedger(file);
+            const target = readFigureTarget(nextInstruction, targetTotal)?.label;
+            setLedgerSource({ name: file.name, ledger, target });
+            setTask("ledger");
+            setView("upload");
+            return;
+          }
+        }
         const result = findFigures(text, nextInstruction, targetTotal, figureStrategy);
         setDates(result.changes);
         setFigureCalculation(result.calculation);
         setAssistantMessage(result.assistantMessage);
         setInterpretedInstruction(result.summary);
+        if (result.calculation) {
+          setTargetTotal(result.calculation.targetDisplay);
+          setFigureStrategy(result.calculation.strategy);
+          setInstruction("");
+        }
       } else {
         const plan = interpretInstruction(nextInstruction, months, direction);
         const result = findDates(text, plan);
         setDates(result.dates);
         setFigureCalculation(null);
         const updateCount = result.dates.filter((date) => date.selected).length;
-        setAssistantMessage(updateCount
-          ? `I found ${updateCount} date${updateCount === 1 ? "" : "s"} to update${result.skipped ? ` and left ${result.skipped} unchanged based on your instruction` : ""}.`
-          : `I read the document, but no dates matched this instruction${result.skipped ? `; ${result.skipped} date${result.skipped === 1 ? " was" : "s were"} intentionally left unchanged` : ""}.`);
+        setAssistantMessage(`${updateCount ? `I found ${updateCount} date${updateCount === 1 ? "" : "s"} ready to update.` : "No dates were selected automatically."}${result.needsReview ? ` Review and select the ${result.needsReview} proposed date correction${result.needsReview === 1 ? "" : "s"} you want to apply.` : ""}${result.skipped ? ` ${result.skipped} date${result.skipped === 1 ? " was" : "s were"} excluded by your instruction.` : ""}`);
         setInterpretedInstruction(plan.summary);
+        setMonths(plan.months);
+        setDirection(plan.direction);
+        if (instruction.trim() || !showProcessing) setInstruction(nextInstruction);
       }
-      setInstruction(nextInstruction);
       setProgress(100);
       setView("review");
     } catch (error) {
@@ -577,6 +642,8 @@ export default function Home() {
     setRefinement("");
     setDates([]);
     setFigureCalculation(null);
+    setLedgerSource(null);
+    setNotice("");
     setAssistantMessage("");
     setInterpretedInstruction("");
     setPreparedDocument(null);
@@ -644,7 +711,7 @@ export default function Home() {
             <div className="trust-card" id="privacy"><span className="shield" aria-hidden="true">✓</span><div><strong>Private on-device mode</strong><small>Your document stays in this browser and is never uploaded to our server.</small></div></div>
           </section>
 
-          {task === "ledger" ? <LedgerWorkspace /> : <>
+          {task === "ledger" ? <LedgerWorkspace initialSource={ledgerSource} /> : <>
           <section className="workspace-grid">
             <article className="panel upload-panel">
               <div className="panel-heading"><span className="step">01</span><div><h2>Add your document</h2><p>DOCX or text-based PDF, up to 25 MB</p></div></div>

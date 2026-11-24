@@ -61,3 +61,22 @@ test("can change only the final figure", () => {
   assert.deepEqual(result.changes.map((change) => change.updated), ["GHS 100.00", "GHS 300.00"]);
   assert.equal(result.calculation?.strategy, "last");
 });
+
+test("keeps currencies exact and ignores identifiers, rates, quantities and summaries", () => {
+  const result = findFigures(
+    "Acct No: 123,456.00\nCash deposit: GHS 100.00\nTransaction ID: 100.00\nUnit price: GHS 5.00\nQuantity 5\nVAT rate: 10.00 %\nTotal: GHS 110.00\nCash paid: 25.00\nClosing Balance: GHS 1,250.00",
+    "Make the total GHS 125.0001. Ref 100001.", "", "proportional",
+  );
+  assert.deepEqual(result.changes.map(({ original }) => original), ["GHS 100.00", "25.00"]);
+  assert.equal(result.calculation?.targetUnits, BigInt(1250001));
+  assert.deepEqual(result.changes.map(({ updated }) => updated), ["GHS 100.0001", "25.0000"]);
+  assert.throws(() => findFigures("Cash USD 100\nCash GHS 100", "", "200", "equal"), /different currencies/);
+});
+
+test("handles totals larger than JavaScript's safe number range and formats negative without a minus", () => {
+  const result = findFigures("Cash GHS 12.50\nCash GHS 37.50", "", "GHS 999,999,999,999,999,999.99", "proportional");
+  assert.deepEqual(result.changes.map(({ updated }) => updated), ["GHS 250000000000000000.00", "GHS 749999999999999999.99"]);
+  const reduced = findFigures("Cash $100.00\nCash $50.00", "", "$12.50", "last");
+  assert.equal(reduced.changes[1].updated, "$(87.50)");
+  assert.equal(reduced.calculation?.targetDisplay, "$12.50");
+});
