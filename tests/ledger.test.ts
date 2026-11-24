@@ -41,12 +41,16 @@ test("reads continuation tables and duplicate summaries while flagging source di
   assert.deepEqual(reconcileLedger(ledger), { debit: cents("210"), credit: cents("400"), closing: cents("1190"), mismatches: 1 });
 });
 
-test("each method reconciles exactly and the report contains the projected final balance", async () => {
+test("each method anchors both the opening and closing rows, including the sample report", async () => {
   const ledger = readLedgerXml(statement);
   const target = cents("1250.01");
   const opening = cents("1000.00");
   for (const [specified, method] of [[null, "spread"], [opening, "spread"], [opening, "last"]] as const) {
     const projection = projectLedger(ledger, target, specified, method);
+    assert.deepEqual(
+      [projection.transactions[0].debit, projection.transactions[0].credit, projection.transactions[0].balance],
+      [cents("0"), cents("0"), projection.opening],
+    );
     let running = projection.opening;
     for (const transaction of projection.transactions) {
       running += transaction.credit - transaction.debit;
@@ -57,7 +61,7 @@ test("each method reconciles exactly and the report contains the projected final
   }
   const projection = projectLedger(ledger, target, opening, "last");
   assert.equal(projection.transactions[2].debit, cents("0"));
-  assert.equal(projection.transactions[2].credit, cents("50.01"));
+  assert.equal(projection.transactions[2].credit, cents("450.01"));
   const report = await JSZip.loadAsync(await (await createLedgerReport(ledger, projection)).arrayBuffer());
   const xml = await report.file("word/document.xml")?.async("string");
   assert.ok(xml);
@@ -65,7 +69,28 @@ test("each method reconciles exactly and the report contains the projected final
   assert.ok(xml.includes("Closing balance (GHS)  1,250.01"));
   const parsed = new DOMParser().parseFromString(xml, "application/xml");
   const rows = Array.from(parsed.getElementsByTagNameNS(wordNamespace, "tr"));
+  assert.equal(rows[1].getElementsByTagNameNS(wordNamespace, "t").item(5)?.textContent, "1,000.00");
   assert.equal(rows.at(-1)?.getElementsByTagNameNS(wordNamespace, "t").item(5)?.textContent, "1,250.01");
+});
+
+test("a dedicated opening row leaves the first regular transaction in the calculation", () => {
+  const openingRow = table([["01-Jan-2026", "Opening Balance", "", "", "", "", "1,000.00"]]);
+  const withOpening = statement.replace("</w:tr><w:tr><w:tc><w:p><w:r><w:t>01-Jan-2026", `</w:tr>${openingRow.slice("<w:tbl>".length, -"</w:tbl>".length)}<w:tr><w:tc><w:p><w:r><w:t>01-Jan-2026`);
+  const ledger = readLedgerXml(withOpening);
+  assert.equal(ledger.hasOpeningEntry, true);
+  assert.equal(ledger.transactions.length, 3);
+  const projection = projectLedger(ledger, cents("1190"), cents("1000"), "last");
+  assert.equal(projection.transactions[0].credit, cents("400"));
+  assert.equal(projection.transactions[0].balance, cents("1400"));
+});
+
+test("a single opening row can only use the same opening and closing balance", () => {
+  const source = readLedgerXml(statement);
+  const single = { ...source, transactions: source.transactions.slice(0, 1) };
+  assert.throws(() => projectLedger(single, cents("1250"), cents("1000"), "last"), /opening and closing balances must match/);
+  const projection = projectLedger(single, cents("1250"), null, "spread");
+  assert.equal(projection.opening, projection.closing);
+  assert.equal(projection.transactions[0].balance, projection.opening);
 });
 
 test("preserves cent precision with large amounts and accepts negative balances", () => {
@@ -113,12 +138,13 @@ test("exports projected values in the uploaded DOCX while retaining its other pa
   assert.match(xml, /OriginalTableStyle/);
   assert.match(xml, /w:w="11906" w:h="16838"/);
   assert.match(xml, /<w:t>Summary \(Projection\)<\/w:t>/);
-  assert.match(xml, /<w:t>Total Dr: <\/w:t><w:t>249.99<\/w:t><w:t>Total Cr: <\/w:t><w:t>400.00<\/w:t>/);
+  assert.match(xml, /<w:t>Total Dr: <\/w:t><w:t>200.00<\/w:t><w:t>Total Cr: <\/w:t><w:t>350.01<\/w:t>/);
   assert.match(xml, /<w:t>987654320<\/w:t>.*<w:t>04-Jan-2026<\/w:t>/);
-  assert.equal(xml.split("<w:t>1,100.00</w:t>").length - 1, 2);
+  assert.equal(xml.split("<w:t>1,100.00</w:t>").length - 1, 3);
   assert.equal(xml.split("<w:t>1,250.01</w:t>").length - 1, 3);
   const updated = readLedgerXml(xml);
   assert.equal(updated.opening, projection.opening);
+  assert.equal(updated.transactions[0].balance, updated.opening);
   assert.equal(updated.reportedClosing, projection.closing);
   assert.equal(reconcileLedger(updated).mismatches, 0);
   assert.deepEqual(updated.transactions, projection.transactions.map(({ date, description, debit, credit, balance }) => ({ date, description, debit, credit, balance })));

@@ -10,6 +10,7 @@ export type Ledger = {
   currency: string;
   opening: bigint;
   reportedClosing: bigint | null;
+  hasOpeningEntry?: boolean;
   transactions: LedgerTransaction[];
 };
 
@@ -72,19 +73,26 @@ function distributeAdjustment(weights: bigint[], difference: bigint) {
 
 export function projectLedger(ledger: Ledger, target: bigint, specifiedOpening: bigint | null, method: LedgerMethod) {
   if (!ledger.transactions.length) throw new Error("Add at least one transaction to calculate a projection.");
-  const source = reconcileLedger(ledger);
-  const opening = specifiedOpening ?? target - (source.credit - source.debit);
-  const difference = target - (opening + source.credit - source.debit);
-  const lastIndex = ledger.transactions.length - 1;
+  // A document with a separate opening entry already has its first balance row.
+  // Otherwise, use the first existing row so the Word table keeps its layout.
+  const firstMovement = ledger.hasOpeningEntry ? 0 : 1;
+  const movements = ledger.transactions.slice(firstMovement);
+  const netMovement = movements.reduce((sum, row) => sum + row.credit - row.debit, zero);
+  const opening = specifiedOpening ?? target - netMovement;
+  const difference = target - (opening + netMovement);
+  if (!movements.length && difference !== zero) {
+    throw new Error("This document has only one row. Its opening and closing balances must match.");
+  }
   const adjustments = method === "last"
-    ? ledger.transactions.map((_, index) => index === lastIndex ? difference : zero)
-    : distributeAdjustment(ledger.transactions.map((row) => row.debit + row.credit), difference);
+    ? movements.map((_, index) => index === movements.length - 1 ? difference : zero)
+    : distributeAdjustment(movements.map((row) => row.debit + row.credit), difference);
 
   let balance = opening;
   let debitTotal = zero;
   let creditTotal = zero;
   const transactions = ledger.transactions.map((row, index) => {
-    const adjustment = adjustments[index];
+    if (index < firstMovement) return { ...row, debit: zero, credit: zero, balance: opening };
+    const adjustment = adjustments[index - firstMovement];
     // When reducing a transaction, retain its direction until it reaches zero.
     // Any additional change becomes an amount in the other column.
     const debitReduction = adjustment > zero ? (row.debit < adjustment ? row.debit : adjustment) : zero;
@@ -94,7 +102,7 @@ export function projectLedger(ledger: Ledger, target: bigint, specifiedOpening: 
     balance += credit - debit;
     debitTotal += debit;
     creditTotal += credit;
-    return { ...row, debit, credit, balance, adjustment };
+    return { ...row, debit, credit, balance };
   });
   if (balance !== target) throw new Error("The projection did not reach the requested closing balance.");
   return { opening, closing: balance, debitTotal, creditTotal, transactions, difference };

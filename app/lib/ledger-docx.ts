@@ -40,7 +40,7 @@ const summaryLabels = {
 };
 
 function summaryAmount(cells: Element[], currency: string) {
-  const amounts = cells.map((cell) => parseMoney(cellText(cell), currency));
+  const amounts = cells.map(cellText).filter((value) => !emptyAmount.test(value)).map((value) => parseMoney(value, currency));
   if (!amounts.length) return null;
   if (amounts[0] === null || amounts.some((amount) => amount !== amounts[0])) {
     throw new Error("The Word file contains unreadable or conflicting summary balances. Use a document for one account and statement period.");
@@ -74,6 +74,7 @@ function indexLedgerXml(xml: string) {
   const transactions: LedgerTransaction[] = [];
   const cashRows: CashRow[] = [];
   let columns: ReturnType<typeof headerColumns> = null;
+  let hasOpeningEntry = false;
 
   for (const rows of tables) {
     for (const { cells, values: row } of rows) {
@@ -86,9 +87,14 @@ function indexLedgerXml(xml: string) {
       const debitCell = row[columns.debit];
       const creditCell = row[columns.credit];
       const balanceCell = row[columns.balance];
-      if ([debitCell, creditCell, balanceCell].every((cell) => emptyAmount.test(cell))) continue;
       const date = row[columns.date];
       const description = row[columns.description] ?? "";
+      if (!transactions.length && [description, date].some((label) => summaryLabels.opening.test(label)) && [debitCell, creditCell].every((cell) => emptyAmount.test(cell) || parseMoney(cell, currency) === BigInt(0))) {
+        summaries.opening.push(cells[columns.balance]);
+        hasOpeningEntry = true;
+        continue;
+      }
+      if ([debitCell, creditCell, balanceCell].every((cell) => emptyAmount.test(cell))) continue;
       if (!date || !/\d/.test(date)) {
         const label = `${date} ${description}`.trim();
         if (summaryLabels.opening.test(label)) { summaries.opening.push(cells[columns.balance]); continue; }
@@ -120,7 +126,7 @@ function indexLedgerXml(xml: string) {
   const reportedClosing = summaryAmount(summaries.closing, currency);
   const inferredOpening = first.balance === null ? null : first.balance - first.credit + first.debit;
   if (opening === null && inferredOpening === null) throw new Error("The opening balance could not be found or inferred from the first transaction.");
-  const ledger: Ledger = { opening: (opening ?? inferredOpening)!, reportedClosing, currency, transactions };
+  const ledger: Ledger = { opening: (opening ?? inferredOpening)!, reportedClosing, currency, hasOpeningEntry, transactions };
   return { document, ledger, cashRows, summaries };
 }
 
@@ -264,7 +270,8 @@ export async function createUpdatedLedgerDocument(file: File, projection: Ledger
     const expected = projection.transactions[index];
     return row.debit === expected.debit && row.credit === expected.credit && row.balance === expected.balance;
   });
-  if (!matches || updated.opening !== projection.opening || (summaries.closing.length && updated.reportedClosing !== projection.closing)) {
+  const firstBalance = updated.hasOpeningEntry ? updated.opening : updated.transactions[0].balance;
+  if (!matches || firstBalance !== projection.opening || updated.opening !== projection.opening || (summaries.closing.length && updated.reportedClosing !== projection.closing)) {
     throw new Error("The projected balances could not be verified in the updated Word file.");
   }
 

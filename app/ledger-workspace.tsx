@@ -27,9 +27,14 @@ export function LedgerWorkspace({ initialSource = null }: { initialSource?: Ledg
   const target = parseMoney(closing, ledger?.currency);
   const specifiedOpening = openingMode === "fixed" ? parseMoney(opening, ledger?.currency) : null;
   const canCalculate = target !== null && (openingMode !== "fixed" || specifiedOpening !== null);
-  const projection = useMemo(() => ledger && canCalculate && target !== null
-    ? projectLedger(ledger, target, specifiedOpening, method)
-    : null, [ledger, canCalculate, target, specifiedOpening, method]);
+  const { projection, projectionError } = useMemo(() => {
+    if (!ledger || !canCalculate || target === null) return { projection: null, projectionError: "" };
+    try {
+      return { projection: projectLedger(ledger, target, specifiedOpening, method), projectionError: "" };
+    } catch (failure) {
+      return { projection: null, projectionError: failure instanceof Error ? failure.message : "The balances could not be calculated." };
+    }
+  }, [ledger, canCalculate, target, specifiedOpening, method]);
 
   function loadSource(name: string, next: Ledger, file?: File) {
     setSource({ name, ledger: next, file });
@@ -102,12 +107,13 @@ export function LedgerWorkspace({ initialSource = null }: { initialSource?: Ledg
           <h2>Set the projected balances</h2>
           <div className="figure-controls ledger-controls">
             <label><span>Target closing balance {currency && `(${currency})`}</span><input value={closing} onChange={(event) => setClosing(event.target.value)} inputMode="decimal" placeholder="50,000.00" disabled={busy} /></label>
-            <label><span>Opening balance</span><select value={openingMode} onChange={(event) => setOpeningMode(event.target.value === "fixed" ? "fixed" : "calculated")} disabled={busy}><option value="calculated">Calculate from the target and existing transactions</option><option value="fixed">Set the opening balance and adjust transactions</option></select></label>
+            <label><span>Opening balance</span><select value={openingMode} onChange={(event) => setOpeningMode(event.target.value === "fixed" ? "fixed" : "calculated")} disabled={busy}><option value="calculated">Calculate from target and remaining transactions</option><option value="fixed">Set the opening balance and adjust transactions</option></select></label>
             {openingMode === "fixed" && <>
               <label><span>Set opening balance {currency && `(${currency})`}</span><input value={opening} onChange={(event) => setOpening(event.target.value)} inputMode="decimal" placeholder="10,000.00" disabled={busy} /></label>
               <label><span>Apply the adjustment</span><select value={method} onChange={(event) => setMethod(event.target.value === "last" ? "last" : "spread")} disabled={busy}><option value="spread">Spread across transactions proportionally</option><option value="last">Apply to the final transaction</option></select></label>
             </>}
             {ledger && !canCalculate && <p role="status">Enter a valid amount with up to two decimal places in {currency ? `${currency} or without a currency code` : "the balance fields"}.</p>}
+            {projectionError && <p className="notice" role="alert">{projectionError}</p>}
           </div>
         </article>
       </div>
@@ -120,7 +126,7 @@ export function LedgerWorkspace({ initialSource = null }: { initialSource?: Ledg
       {projection && ledger && (
         <article className="panel ledger-panel ledger-result">
           <div className="ledger-result-heading">
-            <div><h2>Transaction projection</h2><p>The final running balance equals your closing target. Parentheses indicate a negative balance.</p>{source?.file && <p>The download writes these figures into a copy of your uploaded Word document.</p>}</div>
+            <div><h2>Transaction projection</h2><p>The first row shows the opening balance with zero debit and credit. Later rows account for cash movement and the final balance matches your closing target. Parentheses indicate a negative balance.</p>{source?.file && <p>The download writes these figures into a copy of your uploaded Word document.</p>}</div>
             <button className="primary-button" disabled={busy} onClick={() => void download()}>{exporting ? "Preparing Word file…" : source?.file ? "Download updated Word file" : "Download sample projection"}</button>
           </div>
           <dl className="ledger-totals">
@@ -133,10 +139,10 @@ export function LedgerWorkspace({ initialSource = null }: { initialSource?: Ledg
           <div className="ledger-table-scroll" tabIndex={0} role="region" aria-label="Projected transactions">
             <table>
               <thead><tr><th scope="col">Date</th><th scope="col">Description</th><th scope="col">Debit</th><th scope="col">Credit</th><th scope="col">Running balance</th></tr></thead>
-              <tbody>{projection.transactions.map((row, index) => {
+              <tbody>{ledger.hasOpeningEntry && <tr><td /><th scope="row">Opening balance</th><td>0.00</td><td>0.00</td><td>{formatMoney(projection.opening)}</td></tr>}{projection.transactions.map((row, index) => {
                 const original = ledger.transactions[index];
                 return <tr key={index} className={index === projection.transactions.length - 1 ? "ledger-final-row" : undefined}>
-                  <td>{row.date}</td><td>{row.description || `Transaction ${index + 1}`}</td>
+                  <td>{row.date}</td><td>{row.description || `Transaction ${index + 1}`}{index === 0 && !ledger.hasOpeningEntry && <small>Opening entry</small>}</td>
                   <td>{formatMoney(row.debit)}{row.debit !== original.debit && <small>Source {formatMoney(original.debit)}</small>}</td>
                   <td>{formatMoney(row.credit)}{row.credit !== original.credit && <small>Source {formatMoney(original.credit)}</small>}</td>
                   <td>{formatMoney(row.balance)}</td>
