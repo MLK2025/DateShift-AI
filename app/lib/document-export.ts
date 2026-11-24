@@ -1,7 +1,7 @@
 import JSZip from "jszip";
 import { degrees, PDFDocument, rgb, StandardFonts } from "pdf-lib";
 import type { DocumentExtraction } from "./document-text";
-import { indexWordText, openWordDocument } from "./word-text";
+import { indexWordText, openWordDocument, replaceTextInRuns } from "./word-text";
 
 export type DocumentChange = {
   original: string;
@@ -19,50 +19,6 @@ export type UpdatedDocument = {
 
 function updatedName(fileName: string, extension: "docx" | "pdf") {
   return `${fileName.replace(/\.[^.]+$/, "")}-updated.${extension}`;
-}
-
-function setTextPreservingSpaces(element: Element, value: string) {
-  element.textContent = value;
-  if (/^\s|\s$/.test(value)) element.setAttribute("xml:space", "preserve");
-}
-
-function applyReplacementAcrossNodes(nodes: Element[], starts: number[], start: number, end: number, replacement: string) {
-  const affected: Array<{
-    node: Element;
-    value: string;
-    localStart: number;
-    localEnd: number;
-  }> = [];
-
-  for (let index = 0; index < nodes.length; index += 1) {
-    const value = nodes[index].textContent ?? "";
-    const nodeStart = starts[index];
-    const nodeEnd = nodeStart + value.length;
-    if (nodeEnd <= start || nodeStart >= end) continue;
-
-    const localStart = Math.max(0, start - nodeStart);
-    const localEnd = Math.min(value.length, end - nodeStart);
-    affected.push({ node: nodes[index], value, localStart, localEnd });
-  }
-
-  if (!affected.length) return null;
-
-  let replacementOffset = 0;
-  for (let index = 0; index < affected.length; index += 1) {
-    const { node, value, localStart, localEnd } = affected[index];
-    const isFirst = index === 0;
-    const isLast = index === affected.length - 1;
-    const prefix = isFirst ? value.slice(0, localStart) : "";
-    const suffix = isLast ? value.slice(localEnd) : "";
-    const remainingLength = replacement.length - replacementOffset;
-    const originalShare = localEnd - localStart;
-    const replacementShare = isLast ? remainingLength : Math.min(originalShare, remainingLength);
-    const segment = replacement.slice(replacementOffset, replacementOffset + replacementShare);
-    replacementOffset += replacementShare;
-    setTextPreservingSpaces(node, `${prefix}${segment}${suffix}`);
-  }
-
-  return affected[0].node;
 }
 
 function ancestorByLocalName(node: Element, localName: string) {
@@ -145,7 +101,7 @@ export function updateDocumentXml(xml: string, changes: DocumentChange[]) {
       const change = selected[index];
       const changeEnd = change.sourceIndex + change.original.length;
       if (change.sourceIndex < start || changeEnd > nextStart || !change.original || text.slice(change.sourceIndex, changeEnd) !== change.original) continue;
-      const insertionNode = applyReplacementAcrossNodes(nodes, starts, change.sourceIndex - start, changeEnd - start, change.updated);
+      const insertionNode = replaceTextInRuns(nodes, starts, change.sourceIndex - start, changeEnd - start, change.updated);
       if (insertionNode) {
         syncDateContentControl(insertionNode, change.updated);
         appliedCount += 1;

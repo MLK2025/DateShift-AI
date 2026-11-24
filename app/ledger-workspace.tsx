@@ -11,7 +11,7 @@ const sampleLedger: Ledger = {
   ],
 };
 
-export type LedgerSource = { name: string; ledger: Ledger; target?: string };
+export type LedgerSource = { name: string; ledger: Ledger; target?: string; file?: File };
 
 export function LedgerWorkspace({ initialSource = null }: { initialSource?: LedgerSource | null }) {
   const [source, setSource] = useState<LedgerSource | null>(initialSource);
@@ -31,8 +31,8 @@ export function LedgerWorkspace({ initialSource = null }: { initialSource?: Ledg
     ? projectLedger(ledger, target, specifiedOpening, method)
     : null, [ledger, canCalculate, target, specifiedOpening, method]);
 
-  function loadSource(name: string, next: Ledger) {
-    setSource({ name, ledger: next });
+  function loadSource(name: string, next: Ledger, file?: File) {
+    setSource({ name, ledger: next, file });
     setOpening(formatMoney(next.opening));
     setClosing(formatMoney(reconcileLedger(next).closing));
     setError("");
@@ -48,7 +48,7 @@ export function LedgerWorkspace({ initialSource = null }: { initialSource?: Ledg
     setReading(true);
     try {
       const { readLedger } = await import("./lib/ledger-docx");
-      loadSource(file.name, await readLedger(file));
+      loadSource(file.name, await readLedger(file), file);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "The transaction table could not be read.");
     } finally {
@@ -61,8 +61,9 @@ export function LedgerWorkspace({ initialSource = null }: { initialSource?: Ledg
     setExporting(true);
     setError("");
     try {
-      const { createLedgerReport } = await import("./lib/ledger-docx");
-      const url = URL.createObjectURL(await createLedgerReport(ledger, projection));
+      const { createLedgerReport, createUpdatedLedgerDocument } = await import("./lib/ledger-docx");
+      const blob = source.file ? await createUpdatedLedgerDocument(source.file, projection) : await createLedgerReport(ledger, projection);
+      const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
       link.download = `${source.name.replace(/\.docx$/i, "")}-projection.docx`;
@@ -70,8 +71,8 @@ export function LedgerWorkspace({ initialSource = null }: { initialSource?: Ledg
       link.click();
       link.remove();
       window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    } catch {
-      setError("The Word report could not be created. Try downloading it again.");
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "The updated Word file could not be created.");
     } finally {
       setExporting(false);
     }
@@ -119,8 +120,8 @@ export function LedgerWorkspace({ initialSource = null }: { initialSource?: Ledg
       {projection && ledger && (
         <article className="panel ledger-panel ledger-result">
           <div className="ledger-result-heading">
-            <div><h2>Transaction projection</h2><p>Each running balance adds the row’s credit and subtracts its debit. The final row equals the target closing balance. Parentheses indicate a negative balance.</p></div>
-            <button className="primary-button" disabled={busy} onClick={() => void download()}>{exporting ? "Preparing report…" : "Download Word report"}</button>
+            <div><h2>Transaction projection</h2><p>The final running balance equals your closing target. Parentheses indicate a negative balance.</p>{source?.file && <p>The download writes these figures into a copy of your uploaded Word document.</p>}</div>
+            <button className="primary-button" disabled={busy} onClick={() => void download()}>{exporting ? "Preparing Word file…" : source?.file ? "Download updated Word file" : "Download sample projection"}</button>
           </div>
           <dl className="ledger-totals">
             <div><dt>Opening balance</dt><dd>{displayedMoney(projection.opening)}</dd></div>

@@ -2,6 +2,26 @@ import JSZip from "jszip";
 
 const wordNamespace = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
+export function replaceTextInRuns(nodes: Element[], starts: number[], start: number, end: number, replacement: string) {
+  const affected = nodes.flatMap((node, index) => {
+    const value = node.textContent ?? "";
+    const nodeStart = starts[index];
+    const nodeEnd = nodeStart + value.length;
+    if (nodeEnd <= start || nodeStart >= end) return [];
+    return [{ node, value, from: Math.max(0, start - nodeStart), to: Math.min(value.length, end - nodeStart) }];
+  });
+  let remaining = replacement;
+  affected.forEach(({ node, value, from, to }, index) => {
+    const last = index === affected.length - 1;
+    const length = last ? remaining.length : to - from;
+    const text = value.slice(0, from) + remaining.slice(0, length) + value.slice(to);
+    node.textContent = text;
+    if (/^\s|\s$/.test(text)) node.setAttributeNS("http://www.w3.org/XML/1998/namespace", "xml:space", "preserve");
+    remaining = remaining.slice(length);
+  });
+  return affected[0]?.node ?? null;
+}
+
 export async function openWordDocument(file: File) {
   const zip = await JSZip.loadAsync(await file.arrayBuffer());
   const entry = zip.file("word/document.xml");

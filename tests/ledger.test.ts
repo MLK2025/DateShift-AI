@@ -3,12 +3,13 @@ import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import test from "node:test";
 import JSZip from "jszip";
-import { createLedgerReport, readLedgerXml } from "../app/lib/ledger-docx";
+import { createLedgerReport, createUpdatedLedgerDocument, readLedgerXml } from "../app/lib/ledger-docx";
 import { formatMoney, parseMoney, projectLedger, reconcileLedger } from "../app/lib/ledger";
 
 const require = createRequire(import.meta.url);
 const mammothDirectory = dirname(require.resolve("mammoth/package.json"));
-globalThis.DOMParser = require(require.resolve("@xmldom/xmldom", { paths: [mammothDirectory] })).DOMParser;
+const { DOMParser: XmlParser, XMLSerializer: XmlSerializer } = require(require.resolve("@xmldom/xmldom", { paths: [mammothDirectory] }));
+Object.assign(globalThis, { DOMParser: XmlParser, XMLSerializer: XmlSerializer });
 
 const wordNamespace = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
@@ -87,4 +88,38 @@ test("an undated row and source minus signs do not break cash reconciliation", (
   assert.equal(ledger.transactions[1].date, "date unreadable");
   assert.equal(ledger.transactions[1].debit, cents("200"));
   assert.equal(reconcileLedger(ledger).closing, cents("1190"));
+});
+
+test("exports projected values in the uploaded DOCX while retaining its other parts and transaction columns", async () => {
+  const decorated = statement
+    .replaceAll("<w:tbl>", '<w:tbl><w:tblPr><w:tblStyle w:val="OriginalTableStyle"/></w:tblPr>')
+    .replace("<w:body>", '<w:body><w:p><w:r><w:t>Account</w:t><w:t xml:space="preserve"> </w:t><w:t>Summary</w:t></w:r></w:p><w:p><w:r><w:t>Total Dr: </w:t><w:t>210.00</w:t><w:t>Total Cr: </w:t><w:t>400.00</w:t></w:r></w:p>')
+    .replace("<w:t>10.00</w:t>", '<w:rPr><w:b/></w:rPr><w:t>10.</w:t><w:t>00</w:t>')
+    .replace("</w:body>", `${table([["Total debits", "210.00"], ["Total credits", "400.00"]])}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr></w:body>`);
+  const source = new JSZip();
+  source.file("word/document.xml", decorated);
+  source.file("word/styles.xml", "original styles");
+  source.file("word/header1.xml", "original header");
+  source.file("word/media/logo.png", new Uint8Array([3, 9, 20]));
+  const file = new File([await source.generateAsync({ type: "arraybuffer" })], "original.docx");
+  const ledger = readLedgerXml(decorated);
+  const projection = projectLedger(ledger, cents("1250.01"), cents("1100.00"), "last");
+  const copy = await JSZip.loadAsync(await (await createUpdatedLedgerDocument(file, projection)).arrayBuffer());
+  const xml = await copy.file("word/document.xml")?.async("string");
+  assert.ok(xml);
+  assert.equal(await copy.file("word/styles.xml")?.async("string"), "original styles");
+  assert.equal(await copy.file("word/header1.xml")?.async("string"), "original header");
+  assert.deepEqual(await copy.file("word/media/logo.png")?.async("uint8array"), new Uint8Array([3, 9, 20]));
+  assert.match(xml, /OriginalTableStyle/);
+  assert.match(xml, /w:w="11906" w:h="16838"/);
+  assert.match(xml, /<w:t>Summary \(Projection\)<\/w:t>/);
+  assert.match(xml, /<w:t>Total Dr: <\/w:t><w:t>249.99<\/w:t><w:t>Total Cr: <\/w:t><w:t>400.00<\/w:t>/);
+  assert.match(xml, /<w:t>987654320<\/w:t>.*<w:t>04-Jan-2026<\/w:t>/);
+  assert.equal(xml.split("<w:t>1,100.00</w:t>").length - 1, 2);
+  assert.equal(xml.split("<w:t>1,250.01</w:t>").length - 1, 3);
+  const updated = readLedgerXml(xml);
+  assert.equal(updated.opening, projection.opening);
+  assert.equal(updated.reportedClosing, projection.closing);
+  assert.equal(reconcileLedger(updated).mismatches, 0);
+  assert.deepEqual(updated.transactions, projection.transactions.map(({ date, description, debit, credit, balance }) => ({ date, description, debit, credit, balance })));
 });

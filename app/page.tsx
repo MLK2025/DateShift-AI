@@ -571,7 +571,7 @@ export default function Home() {
             if (currentExtraction.kind !== "docx") throw new Error("This PDF contains debit, credit, and balance columns. Save it as Word (.docx) and use Transactions to calculate the running balances.");
             const ledger = await readLedger(file);
             const target = readFigureTarget(nextInstruction, targetTotal)?.label;
-            setLedgerSource({ name: file.name, ledger, target });
+            setLedgerSource({ name: file.name, file, ledger, target });
             setTask("ledger");
             setView("upload");
             return;
