@@ -75,13 +75,49 @@ input[type=range] { width: 100%; margin: 17px 0 4px; accent-color: var(--blue); 
 .example-shift s { color: #8c91a0; }
 .example-shift b { color: var(--orange); }
 .example-shift strong { color: var(--ink); }
-.task-switcher { width: min(100%, 470px); margin-top: 22px; padding: 5px; display: grid; grid-template-columns: 1fr 1fr; gap: 5px; border: 1px solid #dfe3ee; border-radius: 13px; background: #f4f5f8; }
+.task-switcher { width: min(100%, 630px); margin-top: 22px; padding: 5px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; border: 1px solid #dfe3ee; border-radius: 13px; background: #f4f5f8; }
 .task-switcher button { min-width: 0; border: 0; border-radius: 9px; padding: 10px 12px; display: grid; grid-template-columns: 29px 1fr; grid-template-rows: auto auto; column-gap: 9px; text-align: left; color: #68718a; background: transparent; cursor: pointer; }
 .task-switcher button > span { grid-row: 1 / 3; width: 29px; height: 29px; display: grid; place-items: center; align-self: center; border-radius: 8px; color: #7d859b; background: #e8eaf0; font-size: 14px; }
 .task-switcher button b { color: inherit; font-size: 10px; line-height: 1.3; }
 .task-switcher button small { margin-top: 2px; color: #9a9fad; font-size: 8px; }
 .task-switcher button.active { color: var(--ink); background: white; box-shadow: 0 3px 10px #28304a12; }
 .task-switcher button.active > span { color: white; background: var(--blue); }
+.ledger-mode-link { align-self: flex-start; padding: 10px 0 0; border: 0; background: none; color: var(--blue); font-size: .875rem; font-weight: 700; text-align: left; cursor: pointer; }
+.ledger-workspace { max-width: 1180px; margin: 0 auto; padding-bottom: 40px; }
+.ledger-settings { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+.ledger-panel { min-width: 0; }
+.ledger-panel h2 { margin: 0 0 10px; font-size: 1.25rem; }
+.ledger-panel p, .ledger-source { color: var(--muted); font-size: 1rem; line-height: 1.5; }
+.ledger-panel input[type='file'] { display: block; width: 100%; margin: 18px 0 12px; color: var(--ink); font-size: .875rem; }
+.ledger-controls { margin: 0; padding: 0; border: 0; }
+.ledger-controls label > span { font-size: .875rem; text-transform: none; letter-spacing: normal; }
+.ledger-controls input, .ledger-controls select { font-size: 1rem; }
+.ledger-source { padding: 14px 18px; background: var(--blue-soft); border-radius: 10px; }
+.ledger-result { margin-top: 22px; }
+.ledger-result-heading { display: flex; gap: 12px; justify-content: space-between; align-items: flex-start; }
+.ledger-result-heading p { margin: 0; }
+.ledger-result-heading .primary-button { width: auto; flex-shrink: 0; }
+.ledger-totals { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 22px 0; }
+.ledger-totals div { padding: 14px; border: 1px solid var(--line); border-radius: 10px; }
+.ledger-totals div:last-child { background: var(--blue-soft); }
+.ledger-totals dt { font-size: .875rem; color: var(--muted); }
+.ledger-totals dd { margin: 6px 0 0; font-weight: 800; overflow-wrap: anywhere; }
+.ledger-table-scroll { max-height: 520px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
+.ledger-table-scroll table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: .875rem; }
+.ledger-table-scroll th, .ledger-table-scroll td { padding: 11px 12px; border-bottom: 1px solid var(--line); text-align: left; }
+.ledger-table-scroll th { position: sticky; top: 0; background: #f4f5f8; }
+.ledger-table-scroll th:nth-child(n+3), .ledger-table-scroll td:nth-child(n+3) { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ledger-table-scroll td:first-child { white-space: nowrap; }
+.ledger-table-scroll small { display: block; margin-top: 4px; color: var(--muted); }
+.ledger-final-row { background: var(--blue-soft); font-weight: 800; }
+@media (max-width: 900px) { .ledger-workspace { margin: 0 24px; } }
+@media (max-width: 650px) {
+  .ledger-settings, .ledger-totals { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ledger-settings { grid-template-columns: 1fr; }
+  .ledger-result-heading { flex-direction: column; }
+  .task-switcher button { grid-template-columns: 1fr; padding: 9px; }
+  .task-switcher button > span { display: none; }
+}
 .figure-controls { margin-top: 20px; padding-top: 19px; display: grid; gap: 12px; border-top: 1px solid #eceae4; }
 .figure-controls label { display: grid; gap: 7px; }
 .figure-controls label > span { color: var(--ink); font-size: 9px; font-weight: 900; text-transform: uppercase; letter-spacing: .65px; }

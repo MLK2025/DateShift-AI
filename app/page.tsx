@@ -4,11 +4,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { extractDocument, type DocumentExtraction } from "./lib/document-text";
 import type { UpdatedDocument } from "./lib/document-export";
 import { findFigures, rebalanceFigureChanges, type FigureCalculation, type FigureChange, type FigureStrategy } from "./lib/figure-engine";
+import { LedgerWorkspace } from "./ledger-workspace";
 
 export const dynamic = "force-static";
 
 type Direction = "forward" | "backward";
-type TaskMode = "dates" | "figures";
+type TaskMode = "dates" | "figures" | "ledger";
 type View = "upload" | "processing" | "review" | "complete";
 type DateMatch = {
   id: number;
@@ -632,16 +633,18 @@ export default function Home() {
           <section className="hero" id="workspace">
             <div>
               <span className="eyebrow">PRIVATE DOCUMENT EDITOR</span>
-              <h1>{task === "dates" ? <>Move every date.<br /><span>Keep the document.</span></> : <>Balance every figure.<br /><span>Reach the exact total.</span></>}</h1>
-              <p>{task === "dates" ? "Upload a Word or PDF document. DateShift updates approved dates inside a new copy while retaining the original document’s remaining content and layout." : "Find financial figures, calculate an exact target total without rounding drift, and write the approved amounts into a new Word or PDF copy."}</p>
-              <div className="task-switcher" role="tablist" aria-label="Document editing feature">
-                <button role="tab" aria-selected={task === "dates"} className={task === "dates" ? "active" : ""} onClick={() => switchTask("dates")}><span>◷</span><b>Update dates</b><small>Shift calendar dates</small></button>
-                <button role="tab" aria-selected={task === "figures"} className={task === "figures" ? "active" : ""} onClick={() => switchTask("figures")}><span>Σ</span><b>Balance figures</b><small>Reach an exact total</small></button>
+              <h1>{task === "ledger" ? "Transaction balances" : task === "dates" ? <>Move every date.<br /><span>Keep the document.</span></> : <>Balance every figure.<br /><span>Reach the exact total.</span></>}</h1>
+              <p>{task === "ledger" ? "Reconcile a Word transaction table, then model how an opening balance, debits, and credits reach your target closing balance." : task === "dates" ? "Upload a Word or PDF document. DateShift updates approved dates inside a new copy while retaining the original document’s remaining content and layout." : "Find financial figures, calculate an exact target total without rounding drift, and write the approved amounts into a new Word or PDF copy."}</p>
+              <div className="task-switcher" role="group" aria-label="Document editing feature">
+                <button aria-pressed={task === "dates"} className={task === "dates" ? "active" : ""} onClick={() => switchTask("dates")}><span aria-hidden="true">◷</span><b>Update dates</b><small>Shift calendar dates</small></button>
+                <button aria-pressed={task === "figures"} className={task === "figures" ? "active" : ""} onClick={() => switchTask("figures")}><span aria-hidden="true">Σ</span><b>Balance figures</b><small>Reach an exact total</small></button>
+                <button aria-pressed={task === "ledger"} className={task === "ledger" ? "active" : ""} onClick={() => switchTask("ledger")}><span aria-hidden="true">±</span><b>Transactions</b><small>Calculate running balances</small></button>
               </div>
             </div>
             <div className="trust-card" id="privacy"><span className="shield" aria-hidden="true">✓</span><div><strong>Private on-device mode</strong><small>Your document stays in this browser and is never uploaded to our server.</small></div></div>
           </section>
 
+          {task === "ledger" ? <LedgerWorkspace /> : <>
           <section className="workspace-grid">
             <article className="panel upload-panel">
               <div className="panel-heading"><span className="step">01</span><div><h2>Add your document</h2><p>DOCX or text-based PDF, up to 25 MB</p></div></div>
@@ -671,6 +674,7 @@ export default function Home() {
             <article className="panel chat-panel">
               <div className="panel-heading"><span className="step orange">02</span><div><h2>Tell DateShift what to change</h2><p>Common instructions work in your own words</p></div></div>
               <div className="chat-message assistant-message"><span className="ai-avatar">DS</span><p>{task === "dates" ? "I recognize common numeric, written-month, weekday, timestamp, and mixed-separator date styles—including 01-Dec-2025. I also understand forward or backward month shifts, exclusions, and month-end preservation." : "Tell me the exact total you need. I can detect currency amounts and financial figures, exclude dates and likely IDs, then adjust the selected values proportionally, equally, or by changing only the final figure."}</p></div>
+              {task === "figures" && <button className="ledger-mode-link" onClick={() => switchTask("ledger")}>Working with debits, credits, and running balances? Open Transactions.</button>}
               <label className="instruction-compose" htmlFor="instruction">
                 <span>Your instruction</span>
                 <textarea id="instruction" maxLength={600} value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder={task === "dates" ? fallbackInstruction : "Make all cash figures total GHS 50,000.00 proportionally."} rows={5} />
@@ -687,6 +691,7 @@ export default function Home() {
             <div className="preview-heading"><span className="spark">✦</span><div><strong>Download a real updated document</strong><small>Update dates or rebalance figures in DOCX and text-based PDF files, with an exact-file preview before download.</small></div></div>
             <div className="process-steps"><span><i>1</i> Upload</span><b>→</b><span><i>2</i> Instruct</span><b>→</b><span><i>3</i> Review</span></div>
           </section>
+          </>}
         </>
       )}
 
