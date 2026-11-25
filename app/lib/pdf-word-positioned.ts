@@ -1,7 +1,9 @@
 import { OPS, type PDFPageProxy } from "pdfjs-dist";
 import type { PageViewport } from "pdfjs-dist";
+import type { PdfWordFonts } from "./pdf-word-fonts";
+import type { WordFont } from "./word-fonts";
 
-export type PositionedText = {
+export type PositionedText = WordFont & {
   text: string;
   x: number;
   y: number;
@@ -10,9 +12,6 @@ export type PositionedText = {
   size: number;
   rotation: number;
   stretch: number;
-  font: string;
-  bold: boolean;
-  italic: boolean;
   rtl: boolean;
   color: string;
 };
@@ -119,17 +118,7 @@ function separateTextPixels(
   return strongest === 0 ? null : colorHex(original.data[sample]) + colorHex(original.data[sample + 1]) + colorHex(original.data[sample + 2]);
 }
 
-function wordFont(name: string, family: string) {
-  const compact = name.replace(/^[A-Z]{6}\+/, "").toLowerCase().replace(/[^a-z]/g, "");
-  const supported = ["Arial", "Aptos", "Calibri", "Cambria", "Courier New", "Georgia", "Segoe UI", "Tahoma", "Times New Roman", "Verdana"];
-  const match = supported.find((font) => compact.startsWith(font.toLowerCase().replaceAll(" ", "")));
-  if (match) return match;
-  if (/courier|mono/i.test(name + family)) return "Courier New";
-  if (/^times/i.test(compact) || (family.includes("serif") && !family.includes("sans"))) return "Times New Roman";
-  return "Arial";
-}
-
-export async function positionPdfPage(page: PDFPageProxy, width: number, height: number, signal?: AbortSignal): Promise<PositionedPage> {
+export async function positionPdfPage(page: PDFPageProxy, width: number, height: number, fonts: PdfWordFonts, signal?: AbortSignal): Promise<PositionedPage> {
   const viewport = page.getViewport({ scale: 1 });
   const rasterViewport = imageViewport(page);
   const content = await page.getTextContent();
@@ -163,15 +152,10 @@ export async function positionPdfPage(page: PDFPageProxy, width: number, height:
         const color = separateTextPixels(painted, background, artwork, rasterViewport.scale, x, y, item.width, size, angle);
         if (!color) continue;
 
-        const fontData = page.commonObjs.has(item.fontName) ? page.commonObjs.get(item.fontName) as { name?: string; bold?: boolean; italic?: boolean } : undefined;
-        const name = fontData?.name ?? "";
         const family = content.styles[item.fontName]?.fontFamily ?? "";
-        const font = wordFont(name, family);
-        const bold = Boolean(fontData?.bold || /bold|demi|black|heavy/i.test(name));
-        const italic = Boolean(fontData?.italic || /italic|oblique|slanted/i.test(name));
+        const font = fonts.resolve(page, item.fontName, family, item.str);
         const wordSize = Math.max(1, Math.round(size * yScale * 2) / 2);
-        original.font = `${italic ? "italic " : ""}${bold ? "bold " : ""}${wordSize}px "${font}"`;
-        const measured = original.measureText(item.str).width;
+        const measured = await fonts.measure(original, font, wordSize, item.str);
         const wordWidth = item.width * xScale;
         const stretch = measured > 0 ? Math.max(25, Math.min(400, Math.round(wordWidth / measured * 100))) : 100;
         const boxWidth = wordWidth + wordSize * .6;
@@ -185,7 +169,7 @@ export async function positionPdfPage(page: PDFPageProxy, width: number, height:
         const midY = y * yScale + sin * horizontalCenter + cos * (boxHeight / 2 - baselineInset);
         text.push({
           text: item.str, x: midX - boxWidth / 2, y: midY - boxHeight / 2, width: boxWidth, height: boxHeight,
-          size: wordSize, rotation: angle * 180 / Math.PI, stretch, font, bold, italic, rtl, color,
+          size: wordSize, rotation: angle * 180 / Math.PI, stretch, ...font, rtl, color,
         });
       }
       original.putImageData(artwork, 0, 0);

@@ -1,5 +1,6 @@
 import { openWordDocument } from "./word-text";
 import type { PositionedPage, PositionedText } from "./pdf-word-positioned";
+import { obfuscateWordFont, wordFontStyles, type WordFont } from "./word-fonts";
 
 const relNamespace = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 const wordNamespace = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
@@ -45,7 +46,36 @@ function readTextBox(anchor: Element): PositionedText | null {
   };
 }
 
-export async function readPositionedWordPreview(file: Blob): Promise<PositionedPage[] | null> {
+export type PreviewFont = WordFont & { bytes: Uint8Array };
+
+async function readEmbeddedFonts(zip: Awaited<ReturnType<typeof openWordDocument>>["zip"], parser: DOMParser) {
+  const [tableXml, relsXml] = await Promise.all([
+    zip.file("word/fontTable.xml")?.async("string"),
+    zip.file("word/_rels/fontTable.xml.rels")?.async("string"),
+  ]);
+  if (!tableXml || !relsXml) return [];
+  const names = descendants(parser.parseFromString(tableXml, "application/xml"), "font");
+  const targets = new Map(descendants(parser.parseFromString(relsXml, "application/xml"), "Relationship")
+    .map((relation) => [relation.getAttribute("Id"), relation.getAttribute("Target")]));
+  const faces = await Promise.all(names.flatMap((node) => wordFontStyles.map(async (style, index): Promise<PreviewFont | null> => {
+    const entry = first(node, style);
+    const font = node.getAttributeNS(wordNamespace, "name");
+    const key = entry?.getAttributeNS(wordNamespace, "fontKey");
+    const path = targets.get(entry?.getAttributeNS(relNamespace, "id") ?? null);
+    if (!font || !key || !path || !/^fonts\/embeddedFont\d+\.odttf$/.test(path)) return null;
+    try {
+      const data = await zip.file(`word/${path}`)?.async("uint8array");
+      const bytes = data && obfuscateWordFont(data, key);
+      if (bytes) return { bytes, font, bold: Boolean(index & 1), italic: Boolean(index & 2) };
+    } catch {
+      // A missing font needn't prevent the rest of the document from previewing.
+    }
+    return null;
+  })));
+  return faces.filter((face) => face !== null);
+}
+
+export async function readPositionedWordPreview(file: Blob) {
   const { zip, xml } = await openWordDocument(file);
   if (!/name="PDF page \d+ artwork"/.test(xml)) return null;
   const parser = new DOMParser();
@@ -75,5 +105,6 @@ export async function readPositionedWordPreview(file: Blob): Promise<PositionedP
       }),
     };
   }));
-  return positioned.every((page) => page !== null) ? positioned : null;
+  if (!positioned.every((page) => page !== null)) return null;
+  return { pages: positioned, fonts: await readEmbeddedFonts(zip, parser) };
 }

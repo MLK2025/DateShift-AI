@@ -22,9 +22,11 @@ test("converts editable transaction rows and scanned pages into a valid Word pac
   const page = source.addPage([612, 792]);
   const font = await source.embedFont(StandardFonts.Helvetica);
   const bold = await source.embedFont(StandardFonts.HelveticaBold);
+  const italic = await source.embedFont(StandardFonts.TimesRomanItalic);
   page.drawRectangle({ x: 30, y: 725, width: 550, height: 36, color: rgb(.1, .2, .6) });
   page.drawText("Account activity & charges", { font: bold, x: 42, y: 740, size: 18, color: rgb(1, 1, 1) });
   page.drawText("Side note", { font, x: 22, y: 410, size: 10, rotate: degrees(90) });
+  page.drawText("Original serif italic", { font: italic, x: 42, y: 550, size: 12 });
   const rows = [
     ["Date", "Description", "Debit", "Credit", "Balance"],
     ["12-Oct-2026", "Deposit", "", "30.00", "130.00"],
@@ -66,6 +68,8 @@ test("converts editable transaction rows and scanned pages into a valid Word pac
     const doc = await zip.file("word/document.xml")?.async("string");
     assert.ok(doc);
     assert.match(doc, /Account activity &amp; charges/);
+    assert.match(doc, /w:ascii="Helvetica"[^>]*\/><w:b\/>/);
+    assert.match(doc, /w:ascii="Times"[^>]*\/><w:i\/>/);
     assert.match(doc, /<w:tbl>/);
     assert.match(doc, /w:orient="landscape"/);
     assert.match(doc, /r:embed="page2"/);
@@ -89,12 +93,16 @@ test("converts editable transaction rows and scanned pages into a valid Word pac
     assert.ok(positionZip.file("word/media/pdf-page-2.jpeg"));
     const preview = await readPositionedWordPreview(positioned.blob);
     assert.ok(preview);
-    const title = preview[0].text.find(({ text }) => text === "Account activity & charges");
+    const title = preview.pages[0].text.find(({ text }) => text === "Account activity & charges");
     assert.ok(title && Math.abs(title.x - 42) < 1 && Math.abs(title.y - 35) < 2);
     assert.equal(title.color, "FFFFFF");
     assert.equal(title.bold, true);
-    assert.equal(preview[1].text.length, 0);
-    const artwork = await loadImage(preview[0].image);
+    assert.equal(title.font, "Helvetica");
+    const note = preview.pages[0].text.find(({ text }) => text === "Original serif italic");
+    assert.equal(note?.font, "Times");
+    assert.equal(note.italic, true);
+    assert.equal(preview.pages[1].text.length, 0);
+    const artwork = await loadImage(preview.pages[0].image);
     const artworkCanvas = createCanvas(artwork.width, artwork.height);
     const artworkContext = artworkCanvas.getContext("2d");
     artworkContext.drawImage(artwork, 0, 0);
@@ -108,7 +116,7 @@ test("converts editable transaction rows and scanned pages into a valid Word pac
     assert.match(changed.xml, /<w:t xml:space="preserve">12-Nov-2026<\/w:t>/);
     positionZip.file("word/document.xml", changed.xml);
     const changedPreview = await readPositionedWordPreview(await positionZip.generateAsync({ type: "blob" }));
-    assert.ok(changedPreview?.[0].text.some(({ text }) => text === "12-Nov-2026"));
+    assert.ok(changedPreview?.pages[0].text.some(({ text }) => text === "12-Nov-2026"));
 
     const layout = await convertPdfDocument(pdf, "monthly.pdf", "layout");
     const imageZip = await JSZip.loadAsync(await layout.blob.arrayBuffer());

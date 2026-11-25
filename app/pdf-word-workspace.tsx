@@ -99,7 +99,7 @@ export function PdfWordWorkspace({ initialFile = null }: { initialFile?: File | 
             <label>
               <input type="radio" name="wordFormat" checked={mode === "editable"} onChange={() => chooseMode("editable")} />
               <strong>Editable text with original layout</strong>
-              <small>Keep the page artwork and edit selectable text in positioned Word text boxes. Scanned pages are kept as images.</small>
+              <small>Keep the page artwork, fonts, and editable text in place. Scanned pages stay as images.</small>
             </label>
             <label>
               <input type="radio" name="wordFormat" checked={mode === "reflow"} onChange={() => chooseMode("reflow")} />
@@ -112,6 +112,7 @@ export function PdfWordWorkspace({ initialFile = null }: { initialFile?: File | 
               <small>Include each page as an image. Works for scans and keeps the page appearance.</small>
             </label>
           </fieldset>
+          {mode !== "layout" && <p className="muted">Word can substitute a font if the PDF cannot provide an embeddable copy and the font is missing on your device.</p>}
           <button type="button" className="primary-button" disabled={!file || busy} onClick={() => void convert()}>{busy ? "Converting…" : "Convert to Word"}</button>
           {progress && <p role="status">{progress}</p>}
           {error && <p className="notice" role="alert">{error}</p>}
