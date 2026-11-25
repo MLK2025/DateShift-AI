@@ -107,16 +107,19 @@ async function readDocx(file: File): Promise<DocumentExtraction> {
   };
 }
 
-async function readPdf(file: File): Promise<DocumentExtraction> {
+export async function openPdf(file: File) {
   const pdfjs = await import("pdfjs-dist");
   const workerModule = await import("pdfjs-dist/build/pdf.worker.min.mjs?url");
   pdfjs.GlobalWorkerOptions.workerSrc = workerModule.default;
 
-  const task = pdfjs.getDocument({
+  return pdfjs.getDocument({
     data: new Uint8Array(await file.arrayBuffer()),
-    isEvalSupported: false,
     useWorkerFetch: false,
   });
+}
+
+async function readPdf(file: File): Promise<DocumentExtraction> {
+  const task = await openPdf(file);
   const pdf = await task.promise;
   const spans: PdfTextSpan[] = [];
   let text = "";
