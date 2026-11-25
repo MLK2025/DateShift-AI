@@ -7,11 +7,12 @@ import { findFigures, readFigureTarget, rebalanceFigureChanges, type FigureCalcu
 import { LedgerWorkspace, type LedgerSource } from "./ledger-workspace";
 import { DocxDocumentPreview } from "./docx-preview";
 import { PdfWordWorkspace } from "./pdf-word-workspace";
+import { MockTransactionsWorkspace } from "./mock-transactions-workspace";
 
 export const dynamic = "force-static";
 
 type Direction = "forward" | "backward";
-type TaskMode = "dates" | "figures" | "both" | "ledger" | "convert";
+type TaskMode = "dates" | "figures" | "both" | "ledger" | "convert" | "mock";
 type View = "upload" | "processing" | "review" | "complete";
 type DateMatch = {
   id: number;
@@ -667,20 +668,21 @@ export default function Home() {
           <section className="hero" id="workspace">
             <div>
               <span className="eyebrow">PRIVATE DOCUMENT EDITOR</span>
-              <h1>{task === "convert" ? "Convert PDF to Word" : task === "both" ? "Update dates and figures" : task === "ledger" ? "Transaction balances" : task === "dates" ? <>Move every date.<br /><span>Keep the document.</span></> : <>Balance every figure.<br /><span>Reach the exact total.</span></>}</h1>
-              <p>{task === "convert" ? "Create a Word document from a PDF, then preview it before downloading." : task === "both" ? "Shift dates and recalculate financial figures in a single Word or text-based PDF document." : task === "ledger" ? "Reconcile a Word transaction table, then model how an opening balance, debits, and credits reach your target closing balance." : task === "dates" ? "Upload a Word or PDF document. DateShift updates approved dates inside a new copy while retaining the original document’s remaining content and layout." : "Find financial figures, calculate an exact target total without rounding drift, and write the approved amounts into a new Word or PDF copy."}</p>
-              <div className="task-switcher" role="group" aria-label="Document editing feature">
+              <h1>{task === "mock" ? "Mock transaction generator" : task === "convert" ? "Convert PDF to Word" : task === "both" ? "Update dates and figures" : task === "ledger" ? "Transaction balances" : task === "dates" ? <>Move every date.<br /><span>Keep the document.</span></> : <>Balance every figure.<br /><span>Reach the exact total.</span></>}</h1>
+              <p>{task === "mock" ? "Generate synthetic payroll and everyday transactions to test table layouts and filters." : task === "convert" ? "Create a Word document from a PDF, then preview it before downloading." : task === "both" ? "Shift dates and recalculate financial figures in a single Word or text-based PDF document." : task === "ledger" ? "Reconcile a Word transaction table, then model how an opening balance, debits, and credits reach your target closing balance." : task === "dates" ? "Upload a Word or PDF document. DateShift updates approved dates inside a new copy while retaining the original document’s remaining content and layout." : "Find financial figures, calculate an exact target total without rounding drift, and write the approved amounts into a new Word or PDF copy."}</p>
+              <div className="task-switcher" role="group" aria-label="DateShift tools">
                 <button aria-pressed={task === "dates"} className={task === "dates" ? "active" : ""} onClick={() => switchTask("dates")}><span aria-hidden="true">◷</span><b>Update dates</b><small>Shift calendar dates</small></button>
                 <button aria-pressed={task === "figures"} className={task === "figures" ? "active" : ""} onClick={() => switchTask("figures")}><span aria-hidden="true">Σ</span><b>Balance figures</b><small>Reach an exact total</small></button>
                 <button aria-pressed={task === "both"} className={task === "both" ? "active" : ""} onClick={() => switchTask("both")}><span aria-hidden="true">+</span><b>Dates &amp; figures</b><small>One updated file</small></button>
                 <button aria-pressed={task === "ledger"} className={task === "ledger" ? "active" : ""} onClick={() => switchTask("ledger")}><span aria-hidden="true">±</span><b>Transactions</b><small>Calculate running balances</small></button>
                 <button aria-pressed={task === "convert"} className={task === "convert" ? "active" : ""} onClick={() => switchTask("convert")}><span aria-hidden="true">W</span><b>PDF to Word</b><small>Convert to DOCX</small></button>
+                <button aria-pressed={task === "mock"} className={task === "mock" ? "active" : ""} onClick={() => switchTask("mock")}><span aria-hidden="true">≡</span><b>Mock transactions</b><small>Generate test data</small></button>
               </div>
             </div>
             <div className="trust-card" id="privacy"><span className="shield" aria-hidden="true">✓</span><div><strong>Private on-device mode</strong><small>Your document stays in this browser and is never uploaded to our server.</small></div></div>
           </section>
 
-          {task === "convert" ? <PdfWordWorkspace initialFile={file && /\.pdf$/i.test(file.name) ? file : null} /> : task === "ledger" || isCombinedLedger ? <LedgerWorkspace key={task} initialSource={ledgerSource} onBackToSettings={isCombinedLedger ? () => setLedgerSource(null) : undefined} /> : <>
+          {task === "mock" ? <MockTransactionsWorkspace /> : task === "convert" ? <PdfWordWorkspace initialFile={file && /\.pdf$/i.test(file.name) ? file : null} /> : task === "ledger" || isCombinedLedger ? <LedgerWorkspace key={task} initialSource={ledgerSource} onBackToSettings={isCombinedLedger ? () => setLedgerSource(null) : undefined} /> : <>
           <section className="workspace-grid">
             <article className="panel upload-panel">
               <div className="panel-heading"><span className="step">01</span><div><h2>Add your document</h2><p>DOCX or text-based PDF, up to 25 MB</p></div></div>
