@@ -5,11 +5,12 @@ import { extractDocument, type DocumentExtraction } from "./lib/document-text";
 import type { UpdatedDocument } from "./lib/document-export";
 import { findFigures, readFigureTarget, rebalanceFigureChanges, type FigureCalculation, type FigureChange, type FigureStrategy } from "./lib/figure-engine";
 import { LedgerWorkspace, type LedgerSource } from "./ledger-workspace";
+import { DocxDocumentPreview } from "./docx-preview";
 
 export const dynamic = "force-static";
 
 type Direction = "forward" | "backward";
-type TaskMode = "dates" | "figures" | "ledger";
+type TaskMode = "dates" | "figures" | "both" | "ledger";
 type View = "upload" | "processing" | "review" | "complete";
 type DateMatch = {
   id: number;
@@ -277,57 +278,6 @@ function contextAround(text: string, index: number, length: number) {
   return context;
 }
 
-function DocxDocumentPreview({ blob }: { blob: Blob }) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [renderState, setRenderState] = useState<"rendering" | "ready" | "error">("rendering");
-
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-    let cancelled = false;
-    container.replaceChildren();
-    setRenderState("rendering");
-
-    void import("docx-preview")
-      .then(async ({ renderAsync }) => {
-        await renderAsync(blob, container, container, {
-          breakPages: true,
-          experimental: true,
-          ignoreFonts: false,
-          ignoreHeight: false,
-          ignoreLastRenderedPageBreak: false,
-          ignoreWidth: false,
-          inWrapper: true,
-          renderAltChunks: true,
-          renderEndnotes: true,
-          renderFooters: true,
-          renderFootnotes: true,
-          renderHeaders: true,
-          useBase64URL: true,
-        });
-        if (!cancelled) setRenderState("ready");
-      })
-      .catch(() => {
-        if (cancelled) return;
-        container.replaceChildren();
-        setRenderState("error");
-      });
-
-    return () => {
-      cancelled = true;
-      container.replaceChildren();
-    };
-  }, [blob]);
-
-  return (
-    <div className={`docx-preview-host ${renderState}`}>
-      {renderState === "rendering" && <div className="preview-loading docx-render-loading"><i /><i /><i /><p>Rendering the prepared Word file…</p></div>}
-      {renderState === "error" && <div className="preview-empty"><span>⌕</span><p>The Word preview could not be rendered, but the prepared download is still available.</p></div>}
-      <div className="docx-render-surface" ref={containerRef} aria-label="Rendered updated Word document" />
-    </div>
-  );
-}
-
 function isSingleEdit(value: string, known: string) {
   if (Math.abs(value.length - known.length) > 1) return false;
   let index = 0;
@@ -411,6 +361,14 @@ export function findDates(text: string, plan: InstructionPlan) {
   return { dates, skipped, needsReview };
 }
 
+function describeDateResult(result: ReturnType<typeof findDates>) {
+  const count = result.dates.filter((date) => date.selected).length;
+  const detected = count ? `I found ${count} date${count === 1 ? "" : "s"} ready to update.` : "No dates were selected automatically.";
+  const review = result.needsReview ? ` Review ${result.needsReview} proposed date correction${result.needsReview === 1 ? "" : "s"} before export.` : "";
+  const skipped = result.skipped ? ` ${result.skipped} date${result.skipped === 1 ? " was" : "s were"} excluded by your instruction.` : "";
+  return detected + review + skipped;
+}
+
 export default function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
   const [task, setTask] = useState<TaskMode>("dates");
@@ -440,15 +398,20 @@ export default function Home() {
   const [downloadedCount, setDownloadedCount] = useState(0);
   const previewUrlRef = useRef("");
 
+  const includesDates = task === "dates" || task === "both";
+  const includesFigures = task === "figures" || task === "both";
+  const isCombinedLedger = task === "both" && ledgerSource !== null;
+  const resultType = task === "both" ? "updates" : task === "dates" ? "dates" : "figures";
   const signedMonths = months * (direction === "forward" ? 1 : -1);
   const selectedCount = dates.filter((date) => date.selected).length;
+  const selectedFigureCount = dates.filter((change) => change.selected && isFigureChange(change)).length;
   const exampleDate = useMemo(() => shiftDateLabel("12 March 2026", signedMonths), [signedMonths]);
   const fallbackInstruction = `Move every calendar date ${direction} by ${months} month${months === 1 ? "" : "s"}. Preserve the original date format.`;
   const figureFallbackInstruction = targetTotal.trim()
     ? `Make all detected financial figures total ${targetTotal.trim()} ${figureStrategy === "proportional" ? "proportionally" : figureStrategy === "equal" ? "by sharing the difference equally" : "by changing only the final figure"}.`
     : "";
-  const effectiveInstruction = instruction.trim() || (task === "dates" ? fallbackInstruction : figureFallbackInstruction);
-  const canAnalyze = Boolean(fileName && effectiveInstruction);
+  const effectiveInstruction = instruction.trim() || [includesDates ? fallbackInstruction : "", includesFigures ? figureFallbackInstruction : ""].filter(Boolean).join(" ");
+  const canAnalyze = Boolean(fileName && effectiveInstruction && (task !== "both" || readFigureTarget(instruction, targetTotal)));
 
   useEffect(() => {
     return () => {
@@ -481,10 +444,11 @@ export default function Home() {
     const timer = window.setTimeout(async () => {
       try {
         const { createUpdatedDocument } = await import("./lib/document-export");
-        const result = await createUpdatedDocument(file, extraction, dates, task === "figures");
+        const changes = dates.map((change) => ({ ...change, kind: isFigureChange(change) ? "figure" as const : "date" as const }));
+        const result = await createUpdatedDocument(file, extraction, changes, selectedFigureCount > 0);
         if (cancelled) return;
-        if (task === "figures" && result.updatedCount !== selectedCount) {
-          throw new Error("Some selected amounts could not be written. The exact target could not be verified in the export.");
+        if ((selectedFigureCount || task === "both") && result.updatedCount !== selectedCount) {
+          throw new Error("Some selected values could not be written. Review the selection before downloading.");
         }
 
         const url = URL.createObjectURL(result.blob);
@@ -503,7 +467,7 @@ export default function Home() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [dates, extraction, file, selectedCount, task, view]);
+  }, [dates, extraction, file, selectedCount, selectedFigureCount, task, view]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   function acceptFile(nextFile: File) {
@@ -531,7 +495,7 @@ export default function Home() {
     setNotice("");
     setDates([]);
     setFigureCalculation(null);
-    if (task === "figures" && !targetTotal.trim()) setTargetTotal("GHS 30,000.00");
+    if (includesFigures && !targetTotal.trim()) setTargetTotal("GHS 30,000.00");
   }
 
   function addPrompt(prompt: string) {
@@ -564,37 +528,37 @@ export default function Home() {
         throw new Error("No readable text was found. If this is a scanned PDF, use a text-searchable PDF or export it with OCR first.");
       }
 
-      if (task === "figures") {
+      const plan = includesDates ? interpretInstruction(nextInstruction, months, direction) : null;
+      const dateResult = plan ? findDates(text, plan) : null;
+      if (includesFigures) {
         if (file) {
           const { hasTransactionColumns, readLedger } = await import("./lib/ledger-docx");
           if (hasTransactionColumns(text)) {
-            if (currentExtraction.kind !== "docx") throw new Error("This PDF contains debit, credit, and balance columns. Save it as Word (.docx) and use Transactions to calculate the running balances.");
+            if (currentExtraction.kind !== "docx") throw new Error("This PDF has transaction balance columns. Upload a Word (.docx) copy to recalculate the running balances.");
             const ledger = await readLedger(file);
             const target = readFigureTarget(nextInstruction, targetTotal)?.label;
-            setLedgerSource({ name: file.name, file, ledger, target });
-            setTask("ledger");
+            setLedgerSource({ name: file.name, file, ledger, target, dateReview: dateResult && plan ? { changes: dateResult.dates, summary: plan.summary } : undefined });
+            if (task === "figures") setTask("ledger");
             setView("upload");
             return;
           }
         }
-        const result = findFigures(text, nextInstruction, targetTotal, figureStrategy);
-        setDates(result.changes);
-        setFigureCalculation(result.calculation);
-        setAssistantMessage(result.assistantMessage);
-        setInterpretedInstruction(result.summary);
-        if (result.calculation) {
-          setTargetTotal(result.calculation.targetDisplay);
-          setFigureStrategy(result.calculation.strategy);
-          setInstruction("");
-        }
-      } else {
-        const plan = interpretInstruction(nextInstruction, months, direction);
-        const result = findDates(text, plan);
-        setDates(result.dates);
-        setFigureCalculation(null);
-        const updateCount = result.dates.filter((date) => date.selected).length;
-        setAssistantMessage(`${updateCount ? `I found ${updateCount} date${updateCount === 1 ? "" : "s"} ready to update.` : "No dates were selected automatically."}${result.needsReview ? ` Review and select the ${result.needsReview} proposed date correction${result.needsReview === 1 ? "" : "s"} you want to apply.` : ""}${result.skipped ? ` ${result.skipped} date${result.skipped === 1 ? " was" : "s were"} excluded by your instruction.` : ""}`);
-        setInterpretedInstruction(plan.summary);
+      }
+      const figureResult = includesFigures ? findFigures(text, nextInstruction, targetTotal, figureStrategy, dateResult?.dates) : null;
+      const updates = [...(dateResult?.dates ?? []), ...(figureResult?.changes ?? [])]
+        .sort((a, b) => a.sourceIndex - b.sourceIndex)
+        .map((change, index) => ({ ...change, id: index + 1 }));
+      setDates(updates);
+      setFigureCalculation(figureResult?.calculation ?? null);
+      const dateMessage = dateResult ? describeDateResult(dateResult) : "";
+      setAssistantMessage([dateMessage, figureResult?.assistantMessage].filter(Boolean).join(" "));
+      setInterpretedInstruction([plan?.summary, figureResult?.summary].filter(Boolean).join(" "));
+      if (figureResult?.calculation) {
+        setTargetTotal(figureResult.calculation.targetDisplay);
+        setFigureStrategy(figureResult.calculation.strategy);
+        if (task === "figures") setInstruction("");
+      }
+      if (plan) {
         setMonths(plan.months);
         setDirection(plan.direction);
         if (instruction.trim() || !showProcessing) setInstruction(nextInstruction);
@@ -618,20 +582,21 @@ export default function Home() {
     setDates((current) => current.map((date) => date.id === id ? { ...date, updated: value } : date));
   }
 
+  function rebalanceSelection(next: Array<DateMatch | FigureChange>) {
+    if (!figureCalculation) return next;
+    const figures = rebalanceFigureChanges(next.filter(isFigureChange), figureCalculation);
+    const byId = new Map(figures.map((change) => [change.id, change]));
+    return next.map((change) => byId.get(change.id) ?? change);
+  }
+
   function updateSelection(id: number, selected: boolean) {
-    setDates((current) => {
-      const next = current.map((item) => item.id === id ? { ...item, selected } : item);
-      if (task !== "figures" || !figureCalculation || !next.every(isFigureChange)) return next;
-      return rebalanceFigureChanges(next, figureCalculation);
-    });
+    setDates((current) => rebalanceSelection(current.map((item) => item.id === id ? { ...item, selected } : item)));
   }
 
   function toggleAllSelections() {
     setDates((current) => {
       const selected = selectedCount !== current.length;
-      const next = current.map((item) => ({ ...item, selected }));
-      if (task !== "figures" || !figureCalculation || !next.every(isFigureChange)) return next;
-      return rebalanceFigureChanges(next, figureCalculation);
+      return rebalanceSelection(current.map((item) => ({ ...item, selected })));
     });
   }
 
@@ -685,6 +650,7 @@ export default function Home() {
     setExportedFileName("");
     setDownloadedCount(0);
     setFigureCalculation(null);
+    setLedgerSource(null);
   }
 
   return (
@@ -700,18 +666,19 @@ export default function Home() {
           <section className="hero" id="workspace">
             <div>
               <span className="eyebrow">PRIVATE DOCUMENT EDITOR</span>
-              <h1>{task === "ledger" ? "Transaction balances" : task === "dates" ? <>Move every date.<br /><span>Keep the document.</span></> : <>Balance every figure.<br /><span>Reach the exact total.</span></>}</h1>
-              <p>{task === "ledger" ? "Reconcile a Word transaction table, then model how an opening balance, debits, and credits reach your target closing balance." : task === "dates" ? "Upload a Word or PDF document. DateShift updates approved dates inside a new copy while retaining the original document’s remaining content and layout." : "Find financial figures, calculate an exact target total without rounding drift, and write the approved amounts into a new Word or PDF copy."}</p>
+              <h1>{task === "both" ? "Update dates and figures" : task === "ledger" ? "Transaction balances" : task === "dates" ? <>Move every date.<br /><span>Keep the document.</span></> : <>Balance every figure.<br /><span>Reach the exact total.</span></>}</h1>
+              <p>{task === "both" ? "Shift dates and recalculate financial figures in a single Word or text-based PDF document." : task === "ledger" ? "Reconcile a Word transaction table, then model how an opening balance, debits, and credits reach your target closing balance." : task === "dates" ? "Upload a Word or PDF document. DateShift updates approved dates inside a new copy while retaining the original document’s remaining content and layout." : "Find financial figures, calculate an exact target total without rounding drift, and write the approved amounts into a new Word or PDF copy."}</p>
               <div className="task-switcher" role="group" aria-label="Document editing feature">
                 <button aria-pressed={task === "dates"} className={task === "dates" ? "active" : ""} onClick={() => switchTask("dates")}><span aria-hidden="true">◷</span><b>Update dates</b><small>Shift calendar dates</small></button>
                 <button aria-pressed={task === "figures"} className={task === "figures" ? "active" : ""} onClick={() => switchTask("figures")}><span aria-hidden="true">Σ</span><b>Balance figures</b><small>Reach an exact total</small></button>
+                <button aria-pressed={task === "both"} className={task === "both" ? "active" : ""} onClick={() => switchTask("both")}><span aria-hidden="true">+</span><b>Dates &amp; figures</b><small>One updated file</small></button>
                 <button aria-pressed={task === "ledger"} className={task === "ledger" ? "active" : ""} onClick={() => switchTask("ledger")}><span aria-hidden="true">±</span><b>Transactions</b><small>Calculate running balances</small></button>
               </div>
             </div>
             <div className="trust-card" id="privacy"><span className="shield" aria-hidden="true">✓</span><div><strong>Private on-device mode</strong><small>Your document stays in this browser and is never uploaded to our server.</small></div></div>
           </section>
 
-          {task === "ledger" ? <LedgerWorkspace initialSource={ledgerSource} /> : <>
+          {task === "ledger" || isCombinedLedger ? <LedgerWorkspace key={task} initialSource={ledgerSource} onBackToSettings={isCombinedLedger ? () => setLedgerSource(null) : undefined} /> : <>
           <section className="workspace-grid">
             <article className="panel upload-panel">
               <div className="panel-heading"><span className="step">01</span><div><h2>Add your document</h2><p>DOCX or text-based PDF, up to 25 MB</p></div></div>
@@ -723,15 +690,16 @@ export default function Home() {
               {notice && <p className="notice" role="alert">{notice}</p>}
               {!fileName && <button className="demo-button" onClick={useDemo}><span>✦</span> Try with a sample document</button>}
 
-              {task === "dates" ? (
+              {includesDates && (
                 <div className="compact-duration">
                   <div className="direction-tabs" aria-label="Default date shift direction"><button className={direction === "forward" ? "active" : ""} onClick={() => setDirection("forward")}>Move forward</button><button className={direction === "backward" ? "active" : ""} onClick={() => setDirection("backward")}>Move backward</button></div>
                   <div className="month-stepper"><button onClick={() => setMonths(Math.max(1, months - 1))} aria-label="Decrease months">−</button><div><strong>{months}</strong><span>month{months === 1 ? "" : "s"} {direction}</span></div><button onClick={() => setMonths(Math.min(24, months + 1))} aria-label="Increase months">+</button></div>
                   <div className="example-shift"><span>DEFAULT EXAMPLE</span><p><s>12 March 2026</s><b>→</b><strong>{exampleDate}</strong></p></div>
                 </div>
-              ) : (
+              )}
+              {includesFigures && (
                 <div className="figure-controls">
-                  <label><span>Target total</span><input value={targetTotal} onChange={(event) => setTargetTotal(event.target.value)} placeholder="GHS 50,000.00" inputMode="decimal" /></label>
+                  <label><span>{task === "both" ? "Target total or ledger closing balance" : "Target total"}</span><input value={targetTotal} onChange={(event) => setTargetTotal(event.target.value)} placeholder="GHS 50,000.00" inputMode="decimal" /></label>
                   <label><span>Adjustment method</span><select value={figureStrategy} onChange={(event) => setFigureStrategy(event.target.value as FigureStrategy)}><option value="proportional">Adjust proportionally</option><option value="equal">Share difference equally</option><option value="last">Change final figure only</option></select></label>
                   <div className="calculation-note"><span>✓</span><p><strong>Exact-total calculation</strong><small>Uses integer minor units so rounding cannot change the requested total.</small></p></div>
                 </div>
@@ -740,22 +708,23 @@ export default function Home() {
 
             <article className="panel chat-panel">
               <div className="panel-heading"><span className="step orange">02</span><div><h2>Tell DateShift what to change</h2><p>Common instructions work in your own words</p></div></div>
-              <div className="chat-message assistant-message"><span className="ai-avatar">DS</span><p>{task === "dates" ? "I recognize common numeric, written-month, weekday, timestamp, and mixed-separator date styles—including 01-Dec-2025. I also understand forward or backward month shifts, exclusions, and month-end preservation." : "Tell me the exact total you need. I can detect currency amounts and financial figures, exclude dates and likely IDs, then adjust the selected values proportionally, equally, or by changing only the final figure."}</p></div>
+              <div className="chat-message assistant-message"><span className="ai-avatar">DS</span><p>{task === "both" ? "Set the date shift and target amount, or include both in your instruction. If your Word file has a transaction table, the target becomes its closing balance." : task === "dates" ? "I recognize common numeric, written-month, weekday, timestamp, and mixed-separator date styles—including 01-Dec-2025. I also understand forward or backward month shifts, exclusions, and month-end preservation." : "Tell me the exact total you need. I can detect currency amounts and financial figures, exclude dates and likely IDs, then adjust the selected values proportionally, equally, or by changing only the final figure."}</p></div>
               {task === "figures" && <button className="ledger-mode-link" onClick={() => switchTask("ledger")}>Working with debits, credits, and running balances? Open Transactions.</button>}
               <label className="instruction-compose" htmlFor="instruction">
                 <span>Your instruction</span>
-                <textarea id="instruction" maxLength={600} value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder={task === "dates" ? fallbackInstruction : "Make all cash figures total GHS 50,000.00 proportionally."} rows={5} />
+                <textarea id="instruction" maxLength={600} value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder={task === "both" ? "Move dates forward 3 months and make the cash figures total GHS 50,000.00." : task === "dates" ? fallbackInstruction : "Make all cash figures total GHS 50,000.00 proportionally."} rows={5} />
                 <small>{instruction.length}/600</small>
               </label>
               <div className="quick-prompts" aria-label="Suggested instructions">
-                {task === "dates" ? <><button onClick={() => addPrompt(`Move all dates ${direction} ${months} months.`)}>All dates</button><button onClick={() => addPrompt("Leave signature dates unchanged.")}>Skip signatures</button><button onClick={() => addPrompt("Keep month-end dates at the end of the new month.")}>Preserve month-end</button></> : <><button onClick={() => addPrompt("Adjust all cash figures proportionally.")}>Proportional</button><button onClick={() => addPrompt("Share the difference equally.")}>Equal difference</button><button onClick={() => addPrompt("Change only the final figure.")}>Final figure only</button></>}
+                {includesDates && <><button onClick={() => addPrompt(`Move all dates ${direction} ${months} months.`)}>All dates</button><button onClick={() => addPrompt("Leave signature dates unchanged.")}>Skip signatures</button><button onClick={() => addPrompt("Keep month-end dates at the end of the new month.")}>Preserve month-end</button></>}
+                {includesFigures && <><button onClick={() => addPrompt("Adjust all cash figures proportionally.")}>Proportional</button><button onClick={() => addPrompt("Share the difference equally.")}>Equal difference</button><button onClick={() => addPrompt("Change only the final figure.")}>Final figure only</button></>}
               </div>
-              <button className="primary-button" disabled={!canAnalyze} onClick={analyze}>{task === "dates" ? "Find & update dates" : "Calculate exact figures"} <span>→</span></button>
+              <button className="primary-button" disabled={!canAnalyze} onClick={analyze}>{task === "both" ? "Review dates and figures" : task === "dates" ? "Find & update dates" : "Calculate exact figures"}</button>
             </article>
           </section>
 
           <section className="preview-strip" id="how-it-works">
-            <div className="preview-heading"><span className="spark">✦</span><div><strong>Download a real updated document</strong><small>Update dates or rebalance figures in DOCX and text-based PDF files, with an exact-file preview before download.</small></div></div>
+            <div className="preview-heading"><span className="spark">✦</span><div><strong>Download an updated document</strong><small>Preview date and figure changes in the same DOCX or text-based PDF you’ll download.</small></div></div>
             <div className="process-steps"><span><i>1</i> Upload</span><b>→</b><span><i>2</i> Instruct</span><b>→</b><span><i>3</i> Review</span></div>
           </section>
           </>}
@@ -766,8 +735,8 @@ export default function Home() {
         <section className="focus-view processing-view" aria-live="polite">
           <div className="processing-orbit"><span className="document-glyph">DS</span><i /><i /><i /></div>
           <span className="eyebrow">READING YOUR DOCUMENT</span>
-          <h2>{task === "dates" ? "Finding dates in context" : "Calculating exact figures"}</h2>
-          <p>{task === "dates" ? "DateShift is extracting the document text locally, interpreting your instruction, and preparing an editable result." : "DateShift is identifying financial figures, excluding date values, and balancing the selected amounts to your exact target."}</p>
+          <h2>{task === "both" ? "Finding dates and calculating figures" : task === "dates" ? "Finding dates in context" : "Calculating exact figures"}</h2>
+          <p>{task === "both" ? "DateShift is preparing the date shift and checking which financial amounts can be recalculated." : task === "dates" ? "DateShift is extracting the document text locally, interpreting your instruction, and preparing an editable result." : "DateShift is identifying financial figures, excluding date values, and balancing the selected amounts to your exact target."}</p>
           <div className="progress-track"><span style={{ width: `${progress}%` }} /></div>
           <div className="progress-meta"><span>{progress < 50 ? "Reading document content" : progress < 90 ? "Applying your instruction" : "Preparing your review"}</span><strong>{progress}%</strong></div>
           <div className="file-chip"><span>DS</span><div><strong>{fileName}</strong><small>Private browser processing</small></div></div>
@@ -776,8 +745,8 @@ export default function Home() {
 
       {view === "review" && (
         <section className="review-view" id="workspace">
-          <div className="review-topline"><button className="back-button" onClick={() => setView("upload")}>← Back</button><span className="eyebrow">{task === "dates" ? "DATE RESULT" : "FIGURE RESULT"}</span><span className="secure-badge">✓ Private browser processing</span></div>
-          <div className="review-heading"><div><h1>Review your <span>{task === "dates" ? "date updates." : "calculated figures."}</span></h1><p>{dates.length ? `${selectedCount} update${selectedCount === 1 ? "" : "s"} selected from ${dates.length} detected ${task === "dates" ? `date${dates.length === 1 ? "" : "s"}` : `figure${dates.length === 1 ? "" : "s"}`} in ${fileName}.` : `No ${task === "dates" ? "dates" : "financial figures"} matched your instruction in ${fileName}.`}</p></div><div className="shift-summary"><small>{task === "dates" ? "DEFAULT ADJUSTMENT" : "EXACT TOTAL"}</small><strong>{task === "dates" ? <>{direction === "forward" ? "+" : "−"}{months} <span>month{months === 1 ? "" : "s"}</span></> : <>{figureCalculation?.targetDisplay ?? "—"}<span>{figureCalculation ? `from ${figureCalculation.currentDisplay}` : "target"}</span></>}</strong></div></div>
+          <div className="review-topline"><button className="back-button" onClick={() => setView("upload")}>← Back</button><span className="eyebrow">{task === "both" ? "DATE & FIGURE RESULTS" : task === "dates" ? "DATE RESULT" : "FIGURE RESULT"}</span><span className="secure-badge">✓ Private browser processing</span></div>
+          <div className="review-heading"><div><h1>Review your <span>{task === "both" ? "changes." : task === "dates" ? "date updates." : "calculated figures."}</span></h1><p>{dates.length ? `${selectedCount} of ${dates.length} proposed ${resultType} selected in ${fileName}.` : `No ${resultType} matched your instruction in ${fileName}.`}</p></div><div className="shift-summary"><small>{task === "dates" ? "DEFAULT ADJUSTMENT" : "FIGURE TOTAL"}</small><strong>{task === "dates" ? <>{direction === "forward" ? "+" : "−"}{months} <span>month{months === 1 ? "" : "s"}</span></> : <>{(selectedFigureCount ? figureCalculation?.targetDisplay : figureCalculation?.currentDisplay) ?? "—"}<span>{selectedFigureCount && figureCalculation ? `from ${figureCalculation.currentDisplay}` : "source total"}</span></>}</strong></div></div>
 
           <div className="ai-summary"><span className="ai-avatar">DS</span><div><strong>{assistantMessage || "Analysis complete."}</strong><p><b>I understood:</b> {interpretedInstruction || effectiveInstruction}</p></div></div>
 
@@ -786,17 +755,17 @@ export default function Home() {
               <section className="document-preview-card" aria-label="Updated document preview">
                 <div className="document-preview-header">
                   <div><span className="preview-file-type">{extraction?.kind === "pdf" ? "PDF" : "DOCX"}</span><div><strong>Updated document preview</strong><small>This is generated from the same file that will download.</small></div></div>
-                  <span className={`preview-status ${preparedDocument ? "ready" : ""}`}>{preparingPreview ? "Preparing…" : preparedDocument ? `✓ ${preparedDocument.updatedCount} change${preparedDocument.updatedCount === 1 ? "" : "s"} verified` : selectedCount ? "Preview unavailable" : `Select a ${task === "dates" ? "date" : "figure"}`}</span>
+                  <span className={`preview-status ${preparedDocument ? "ready" : ""}`}>{preparingPreview ? "Preparing…" : preparedDocument ? `✓ ${preparedDocument.updatedCount} change${preparedDocument.updatedCount === 1 ? "" : "s"} verified` : selectedCount ? "Preview unavailable" : "Select an update"}</span>
                 </div>
                 <div className="document-preview-body">
                   {preparingPreview ? (
-                    <div className="preview-loading"><i /><i /><i /><p>Writing the selected {task === "dates" ? "dates" : "figures"} into a private preview…</p></div>
+                    <div className="preview-loading"><i /><i /><i /><p>Writing the selected {resultType} into a private preview…</p></div>
                   ) : preparedDocument && extraction?.kind === "pdf" && previewUrl ? (
                     <iframe className="pdf-preview" src={`${previewUrl}#toolbar=0&navpanes=0&view=FitH`} title="Updated PDF preview" />
                   ) : preparedDocument && extraction?.kind === "docx" ? (
                     <DocxDocumentPreview blob={preparedDocument.blob} />
                   ) : (
-                    <div className="preview-empty"><span>⌕</span><p>{selectedCount ? "The preview could not be prepared. Review the message beside the download button." : `Select at least one ${task === "dates" ? "date" : "figure"} to prepare the updated file preview.`}</p></div>
+                    <div className="preview-empty"><span>⌕</span><p>{selectedCount ? "The preview could not be prepared. Review the message beside the download button." : "Select at least one update to prepare the preview."}</p></div>
                   )}
                 </div>
                 <div className="document-preview-footer"><span><i /> Rendered from the exact prepared file used by Download</span><small>{fileName}</small></div>
@@ -804,21 +773,21 @@ export default function Home() {
 
               <div className="review-layout">
               <article className="review-list-card">
-                <div className="review-list-header"><div><strong>{task === "dates" ? "Detected date updates" : "Calculated figure updates"}</strong><span>{selectedCount} of {dates.length} selected</span></div><button onClick={toggleAllSelections}>{selectedCount === dates.length ? "Clear all" : "Select all"}</button></div>
+                <div className="review-list-header"><div><strong>{task === "both" ? "Date and figure updates" : task === "dates" ? "Detected date updates" : "Calculated figure updates"}</strong><span>{selectedCount} of {dates.length} selected</span></div><button onClick={toggleAllSelections}>{selectedCount === dates.length ? "Clear all" : "Select all"}</button></div>
                 <div className="date-list">
                   {dates.map((date) => (
                     <div className={`date-row ${date.selected ? "selected" : ""}`} key={date.id}>
                       <label className="check-control" aria-label={`Include ${date.original}`}><input type="checkbox" checked={date.selected} onChange={(event) => updateSelection(date.id, event.target.checked)} /><span>✓</span></label>
-                      <div className="date-detail"><div className="context-line"><span>{date.context}</span><b>{date.confidence}% match</b></div><div className="date-change"><s>{date.original}</s><i>→</i><input maxLength={80} readOnly={task === "figures"} aria-label={`Updated value for ${date.original}`} value={date.updated} onChange={(event) => updateDate(date.id, event.target.value)} /></div><small className="date-reason">{date.reason}</small></div>
+                      <div className="date-detail"><div className="context-line"><span>{date.context}</span><b>{task === "both" ? isFigureChange(date) ? "Figure" : "Date" : `${date.confidence}% match`}</b></div><div className="date-change"><s>{date.original}</s><i>→</i><input maxLength={80} readOnly={isFigureChange(date)} aria-label={`Updated value for ${date.original}`} value={date.updated} onChange={(event) => updateDate(date.id, event.target.value)} /></div><small className="date-reason">{date.reason}</small></div>
                     </div>
                   ))}
                 </div>
               </article>
               <aside className="export-card">
                 <div className="refine-chat"><span className="ai-avatar">DS</span><div><strong>Refine the result</strong><small>Add another instruction</small></div></div>
-                <textarea value={refinement} onChange={(event) => setRefinement(event.target.value)} placeholder={task === "dates" ? "e.g. Keep the signing date unchanged" : "e.g. Use GHS 75,000 and change only the final figure"} rows={3} />
+                <textarea value={refinement} onChange={(event) => setRefinement(event.target.value)} placeholder={task === "both" ? "e.g. Keep the signing date unchanged and use GHS 75,000" : task === "dates" ? "e.g. Keep the signing date unchanged" : "e.g. Use GHS 75,000 and change only the final figure"} rows={3} />
                 <button className="secondary-button refine-button" disabled={!refinement.trim() || refining} onClick={() => { const combined = `${effectiveInstruction} ${refinement.trim()}`; setRefinement(""); void requestAnalysis(combined, false); }}>{refining ? "Updating…" : "Apply instruction"}</button>
-                <dl><div><dt>Document</dt><dd>{fileName}</dd></div><div><dt>{task === "dates" ? "Dates" : "Figures"} selected</dt><dd>{selectedCount}</dd></div>{task === "figures" && figureCalculation && <div><dt>Calculated total</dt><dd>{figureCalculation.targetDisplay}</dd></div>}<div><dt>Output check</dt><dd>{preparedDocument ? "Verified" : preparingPreview ? "Preparing" : "Not ready"}</dd></div><div><dt>Processing</dt><dd>Private</dd></div></dl>
+                <dl><div><dt>Document</dt><dd>{fileName}</dd></div>{includesDates && <div><dt>Dates selected</dt><dd>{selectedCount - selectedFigureCount}</dd></div>}{includesFigures && <div><dt>Figures selected</dt><dd>{selectedFigureCount}</dd></div>}{figureCalculation && selectedFigureCount > 0 && <div><dt>Calculated total</dt><dd>{figureCalculation.targetDisplay}</dd></div>}<div><dt>Output check</dt><dd>{preparedDocument ? "Verified" : preparingPreview ? "Preparing" : "Not ready"}</dd></div><div><dt>Processing</dt><dd>Private</dd></div></dl>
                 {exportError && <p className="notice export-error" role="alert">{exportError}</p>}
                 <button className="primary-button" disabled={!selectedCount || preparingPreview || !preparedDocument} onClick={() => downloadPreparedDocument()}>{preparingPreview ? "Preparing verified preview…" : `Download updated ${extraction?.kind === "pdf" ? "PDF" : "Word file"}`} <span>↓</span></button>
                 <small className="export-note">The download button uses the exact file shown in the preview above.</small>
@@ -826,16 +795,16 @@ export default function Home() {
               </div>
             </>
           ) : (
-            <div className="empty-state"><span>⌕</span><h3>No matching {task === "dates" ? "dates" : "figures"}</h3><p>The document was read, but no {task === "dates" ? "date updates" : "editable financial figures"} matched your instruction. Change the instruction or choose another document.</p><div><button className="secondary-button" onClick={restart}>Choose another file</button><button className="primary-button" onClick={() => setView("upload")}>Change instruction</button></div></div>
+            <div className="empty-state"><span>⌕</span><h3>No matching {resultType}</h3><p>Change the instruction or choose another document.</p><div><button className="secondary-button" onClick={restart}>Choose another file</button><button className="primary-button" onClick={() => setView("upload")}>Change instruction</button></div></div>
           )}
         </section>
       )}
 
       {view === "complete" && (
         <section className="focus-view complete-view">
-          <div className="success-ring">✓</div><span className="eyebrow">UPDATED DOCUMENT DOWNLOADED</span><h2>Your updated document is ready.</h2><p>{downloadedCount} approved {task === "dates" ? "date" : "figure"} update{downloadedCount === 1 ? "" : "s"} have been written into <strong>{exportedFileName || fileName}</strong> while retaining the rest of the document.</p>
+          <div className="success-ring">✓</div><span className="eyebrow">UPDATED DOCUMENT DOWNLOADED</span><h2>Your updated document is ready.</h2><p><strong>{exportedFileName || fileName}</strong> contains {downloadedCount} approved update{downloadedCount === 1 ? "" : "s"}.</p>
           {exportError && <p className="notice" role="alert">{exportError}</p>}
-          <div className="completion-summary"><div><small>DOCUMENT FORMAT</small><strong>{extraction?.kind === "pdf" ? "PDF" : "Word (.docx)"}</strong></div><div><small>{task === "dates" ? "DATES" : "FIGURES"} UPDATED</small><strong>{downloadedCount}</strong></div><div><small>FILE STATUS</small><strong className="green">Downloaded</strong></div></div>
+          <div className="completion-summary"><div><small>DOCUMENT FORMAT</small><strong>{extraction?.kind === "pdf" ? "PDF" : "Word (.docx)"}</strong></div><div><small>UPDATES APPLIED</small><strong>{downloadedCount}</strong></div><div><small>FILE STATUS</small><strong className="green">Downloaded</strong></div></div>
           <div className="completion-actions"><button className="primary-button" disabled={!preparedDocument} onClick={() => downloadPreparedDocument(false)}>Download updated file again <span>↓</span></button><button className="secondary-button new-document" onClick={restart}>Process another document <span>→</span></button></div>
         </section>
       )}

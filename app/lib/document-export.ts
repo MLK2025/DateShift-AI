@@ -4,6 +4,7 @@ import type { DocumentExtraction } from "./document-text";
 import { indexWordText, openWordDocument, replaceTextInRuns } from "./word-text";
 
 export type DocumentChange = {
+  kind?: "date" | "figure";
   original: string;
   updated: string;
   sourceIndex: number;
@@ -166,6 +167,7 @@ async function updatePdf(file: File, extraction: DocumentExtraction, changes: Do
   };
 
   for (const change of changes.filter((item) => item.selected)) {
+    const exactPlacement = exactFigures && change.kind !== "date";
     let start = change.sourceIndex;
     let end = start + change.original.length;
     let updated = change.updated;
@@ -199,7 +201,7 @@ async function updatePdf(file: File, extraction: DocumentExtraction, changes: Do
     const samePage = matchingSpans.filter((span) => span.pageNumber === pageNumber);
     const page = pages[pageNumber - 1];
     const baseline = matchingSpans[0].y;
-    if (!page || samePage.length !== matchingSpans.length || (exactFigures && (samePage[0].start > start || samePage.at(-1)!.end < end || samePage.some((span) => Math.abs(span.y - baseline) > 2 || Math.abs(span.rotation) > 1)))) {
+    if (!page || samePage.length !== matchingSpans.length || (exactPlacement && (samePage[0].start > start || samePage.at(-1)!.end < end || samePage.some((span) => Math.abs(span.y - baseline) > 2 || Math.abs(span.rotation) > 1)))) {
       unmatched += 1;
       continue;
     }
@@ -218,7 +220,7 @@ async function updatePdf(file: File, extraction: DocumentExtraction, changes: Do
       return {
         x: span.x + Math.cos(radians) * advance,
         y: span.y + Math.sin(radians) * advance,
-        width: exactFigures ? span.width * widthRatio : Math.max(span.width * widthRatio, 4),
+        width: exactPlacement ? span.width * widthRatio : Math.max(span.width * widthRatio, 4),
         height: span.height,
         rotation: span.rotation,
         backgroundColor: span.backgroundColor,
@@ -226,20 +228,20 @@ async function updatePdf(file: File, extraction: DocumentExtraction, changes: Do
       };
     });
     const first = fragments[0];
-    const availableWidth = Math.max(fragments.reduce((total, fragment) => total + fragment.width, 0), exactFigures ? 0 : 8);
+    const availableWidth = Math.max(fragments.reduce((total, fragment) => total + fragment.width, 0), exactPlacement ? 0 : 8);
     const height = Math.max(...fragments.map((fragment) => fragment.height));
     let fontSize = Math.max(5, Math.min(height * 0.92, 18));
     const renderedWidth = font.widthOfTextAtSize(updated, fontSize);
-    if (exactFigures && renderedWidth * 4.5 / fontSize > availableWidth) { unmatched++; continue; }
+    if (exactPlacement && renderedWidth * 4.5 / fontSize > availableWidth) { unmatched++; continue; }
     if (renderedWidth > availableWidth) fontSize = Math.max(4.5, fontSize * availableWidth / renderedWidth);
 
     for (const fragment of fragments) {
       const background = fragment.backgroundColor ?? { red: 1, green: 1, blue: 1 };
       page.drawRectangle({
-        x: fragment.x - (exactFigures ? 0 : 1.5),
-        y: fragment.y - (exactFigures ? 1 : 2),
-        width: fragment.width + (exactFigures ? 0 : 3),
-        height: fragment.height + (exactFigures ? 2 : 4),
+        x: fragment.x - (exactPlacement ? 0 : 1.5),
+        y: fragment.y - (exactPlacement ? 1 : 2),
+        width: fragment.width + (exactPlacement ? 0 : 3),
+        height: fragment.height + (exactPlacement ? 2 : 4),
         color: rgb(background.red, background.green, background.blue),
         rotate: degrees(fragment.rotation),
       });

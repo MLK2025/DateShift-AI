@@ -5,6 +5,8 @@ import test from "node:test";
 import JSZip from "jszip";
 import { createLedgerReport, createUpdatedLedgerDocument, readLedgerXml } from "../app/lib/ledger-docx";
 import { formatMoney, parseMoney, projectLedger, reconcileLedger } from "../app/lib/ledger";
+import { extractDocument } from "../app/lib/document-text";
+import { findDates, interpretInstruction } from "../app/page";
 
 const require = createRequire(import.meta.url);
 const mammothDirectory = dirname(require.resolve("mammoth/package.json"));
@@ -148,4 +150,29 @@ test("exports projected values in the uploaded DOCX while retaining its other pa
   assert.equal(updated.reportedClosing, projection.closing);
   assert.equal(reconcileLedger(updated).mismatches, 0);
   assert.deepEqual(updated.transactions, projection.transactions.map(({ date, description, debit, credit, balance }) => ({ date, description, debit, credit, balance })));
+});
+
+test("writes selected dates and reconciled balances into one copy of the uploaded ledger", async () => {
+  const zip = new JSZip();
+  zip.file("word/document.xml", statement);
+  const file = new File([await zip.generateAsync({ type: "arraybuffer" })], "ledger.docx");
+  const extraction = await extractDocument(file);
+  const instruction = interpretInstruction("Move dates backward by two months.", 3, "forward");
+  const { dates } = findDates(extraction.text, instruction);
+  const selected = dates.map((date) => ({ ...date, selected: date.original !== "02-Jan-2026" }));
+  assert.equal(selected.filter((date) => date.selected).length, 5);
+  const projection = projectLedger(readLedgerXml(statement), cents("1200.01"), cents("1130.25"), "spread");
+  const updatedFile = await createUpdatedLedgerDocument(file, projection, selected);
+  const copy = await JSZip.loadAsync(await updatedFile.arrayBuffer());
+  const xml = await copy.file("word/document.xml")?.async("string");
+  assert.ok(xml);
+  const updated = readLedgerXml(xml);
+
+  assert.deepEqual(updated.transactions.map((row) => row.date), ["01-Nov-2025", "03-Nov-2025", "04-Nov-2025"]);
+  assert.match(xml, /<w:t>123456789<\/w:t>.*<w:t>02-Jan-2026<\/w:t>/);
+  assert.match(xml, /<w:t>987654320<\/w:t>.*<w:t>04-Nov-2025<\/w:t>/);
+  assert.equal(updated.transactions[0].balance, projection.opening);
+  assert.equal(updated.transactions.at(-1)?.balance, projection.closing);
+  assert.equal(updated.reportedClosing, projection.closing);
+  assert.equal(reconcileLedger(updated).mismatches, 0);
 });

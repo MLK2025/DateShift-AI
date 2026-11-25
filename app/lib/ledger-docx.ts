@@ -1,6 +1,7 @@
 import JSZip from "jszip";
 import { formatMoney, parseMoney, type Ledger, type LedgerProjection, type LedgerTransaction } from "./ledger";
 import { openWordDocument, replaceTextInRuns } from "./word-text";
+import type { DocumentChange } from "./document-export";
 
 const wordNamespace = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
@@ -241,9 +242,17 @@ function markProjection(document: Document, currency: string, projection: Ledger
   body.insertBefore(marker, children(body, "sectPr")[0] ?? null);
 }
 
-export async function createUpdatedLedgerDocument(file: File, projection: LedgerProjection) {
+export async function createUpdatedLedgerDocument(file: File, projection: LedgerProjection, dateChanges: DocumentChange[] = []) {
   const { zip, xml } = await openWordDocument(file);
-  const { document, ledger, cashRows, summaries } = indexLedgerXml(xml);
+  let sourceXml = xml;
+  const selectedDates = dateChanges.filter((change) => change.selected);
+  if (selectedDates.length) {
+    const { updateDocumentXml } = await import("./document-export");
+    const result = updateDocumentXml(xml, selectedDates);
+    if (result.appliedCount !== selectedDates.length) throw new Error("Some selected dates could not be written. Review the date selection before downloading.");
+    sourceXml = result.xml;
+  }
+  const { document, ledger, cashRows, summaries } = indexLedgerXml(sourceXml);
   if (cashRows.length !== projection.transactions.length) throw new Error("The Word transaction table no longer matches the projection.");
 
   for (const [index, row] of cashRows.entries()) {

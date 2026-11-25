@@ -160,17 +160,18 @@ export function rebalanceFigureChanges(changes: FigureChange[], calculation: Fig
 }
 
 export function readFigureTarget(instruction: string, fallbackTarget: string) {
-  const instructionTarget = Array.from(instruction.matchAll(new RegExp(`\\b(?:total(?:\\s+of|\\s+to)?|target(?:\\s+of)?|reach|to|use)\\s*[:=]?\\s+(${amountSource})`, "gi"))).at(-1)?.[1];
+  const amountWithContext = new RegExp(`\\b(?:total(?:\\s+of|\\s+to)?|target(?:\\s+of)?|reach|to|use)\\s*[:=]?\\s+(${amountSource})(?!\\s*(?:calendar\\s+)?(?:days?|weeks?|months?|years?)\\b)`, "gi");
+  const instructionTarget = Array.from(instruction.matchAll(amountWithContext)).at(-1)?.[1];
   const instructionParsed = instructionTarget ? parseAmountLabel(instructionTarget) : null;
   const fallbackParsed = parseAmountLabel(fallbackTarget.trim());
   return instructionParsed && instructionTarget ? { label: instructionTarget, parsed: instructionParsed } : fallbackParsed ? { label: fallbackTarget.trim(), parsed: fallbackParsed } : null;
 }
 
-export function findFigures(text: string, instruction: string, fallbackTarget: string, fallbackStrategy: FigureStrategy) {
+export function findFigures(text: string, instruction: string, fallbackTarget: string, fallbackStrategy: FigureStrategy, protectedDates: { sourceIndex: number; original: string }[] = []) {
   const target = readFigureTarget(instruction, fallbackTarget);
   if (!target) throw new Error("Add the exact target total, for example: Make the cash figures total GHS 50,000.00.");
 
-  const ranges = dateRanges(text);
+  const ranges = dateRanges(text).concat(protectedDates.map(({ sourceIndex, original }) => ({ start: sourceIndex, end: sourceIndex + original.length })));
   const candidates = [...text.matchAll(new RegExp(amountSource, "gi"))].flatMap((match) => {
     const original = match[0];
     const sourceIndex = match.index ?? 0;

@@ -8,6 +8,7 @@ import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { createUpdatedDocument, type DocumentChange } from "../app/lib/document-export";
 import { extractDocument } from "../app/lib/document-text";
 import { findFigures } from "../app/lib/figure-engine";
+import { findDates, interpretInstruction } from "../app/page";
 
 const require = createRequire(import.meta.url);
 const mammothRoot = dirname(require.resolve("mammoth/package.json"));
@@ -154,4 +155,44 @@ test("updates only the selected cash occurrence when Word repeats the same figur
   const result = await extractDocument(new File([output.blob], "cash-updated.docx"));
   assert.equal(output.updatedCount, 1);
   assert.equal(result.text, "Account No: 100.00\nCash paid: 175.00\tRef: 100.00\n01-Dec-2025");
+});
+
+test("applies a date shift and the requested cash total to the same PDF", async () => {
+  const source = await PDFDocument.create();
+  const page = source.addPage();
+  const font = await source.embedFont(StandardFonts.Helvetica);
+  const lines = ["Date: 01-Dec-2025", "Cash paid: GHS 100.00", "Reference: 100.00"];
+  let start = 0;
+  const pdfSpans = lines.map((text, index) => {
+    const span = { pageNumber: 1, x: 72, y: 700 - index * 30, start, end: start + text.length, text, width: font.widthOfTextAtSize(text, 12), height: 12, rotation: 0 };
+    page.drawText(text, { x: span.x, y: span.y, size: span.height, font });
+    start = span.end + 1;
+    return span;
+  });
+  const sourceBytes = await source.save();
+  const file = new File([sourceBytes.slice().buffer as ArrayBuffer], "cash.pdf");
+  const extraction = { kind: "pdf" as const, text: lines.join("\n"), pdfSpans };
+  const instruction = "Make the cash figures total GHS 175.00 and move the dates to 3 months later.";
+  const { dates } = findDates(extraction.text, interpretInstruction(instruction, 3, "forward"));
+  const { changes } = findFigures(extraction.text, instruction, "", "proportional", dates);
+  assert.deepEqual(dates.map(({ updated }) => updated), ["01-Mar-2026"]);
+  assert.deepEqual(changes.map(({ updated }) => updated), ["GHS 175.00"]);
+  const output = await createUpdatedDocument(file, extraction, [
+    ...dates.map((date) => ({ ...date, kind: "date" as const })),
+    ...changes,
+  ], true);
+
+  assert.equal(output.updatedCount, 2);
+  const { getDocument } = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const loading = getDocument({ data: new Uint8Array(await output.blob.arrayBuffer()) });
+  try {
+    const pdf = await loading.promise;
+    const content = await (await pdf.getPage(1)).getTextContent();
+    const result = content.items.flatMap((item) => "str" in item ? [item.str] : []).join("\n");
+    assert.match(result, /01-Mar-2026/);
+    assert.match(result, /GHS 175\.00/);
+    assert.match(result, /Reference: 100\.00/);
+  } finally {
+    await loading.destroy();
+  }
 });
