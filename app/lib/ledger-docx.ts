@@ -214,14 +214,19 @@ function markProjection(document: Document, currency: string, projection: Ledger
   if (!summaries.opening.length) note.push(`Opening balance ${currencyLabel}${formatMoney(projection.opening)}`);
   if (!summaries.closing.length) note.push(`Closing balance ${currencyLabel}${formatMoney(projection.closing)}`);
   const paragraphs = children(body, "p");
-  if (note.length === 1) {
-    const heading = paragraphs.find((paragraph) => /^Account Summary(?: \(Projection\))?$/i.test(directTextRuns(paragraph).map((node) => node.textContent).join("").trim()));
-    if (heading) {
-      const runs = directTextRuns(heading);
-      const last = runs.at(-1)!;
-      if (!last.textContent?.includes("(Projection)")) last.textContent += " (Projection)";
-      return;
-    }
+  for (const paragraph of paragraphs) {
+    const nodes = directTextRuns(paragraph);
+    const text = nodes.map((node) => node.textContent ?? "").join("");
+    const oldHeading = /^(\s*Account Summary)(\s+\(Projection\))\s*$/i.exec(text);
+    if (!oldHeading) continue;
+
+    let offset = 0;
+    const starts = nodes.map((node) => {
+      const start = offset;
+      offset += node.textContent?.length ?? 0;
+      return start;
+    });
+    replaceTextInRuns(nodes, starts, oldHeading[1].length, oldHeading[1].length + oldHeading[2].length, "");
   }
   const existing = paragraphs.find((p) => directTextRuns(p)[0]?.textContent?.startsWith(label));
   if (existing) {
