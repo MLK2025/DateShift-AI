@@ -39,7 +39,6 @@ export function templateDate(text: string): { date: Date; format: (date: Date) =
   };
 }
 
-const payroll = ["Payroll", "Salary Cr", "Pay Run", "Wages Cr", "Staff Pay", "Monthly Pay"];
 type Narration = { channel: string; texts: string[] };
 const debits: Narration[] = [
   { channel: "POS", texts: ["Card Purchase", "Retail Purchase", "Grocery Purchase", "Merchant Payment"] },
@@ -83,7 +82,7 @@ function styledDescription(original: string, phrase: string, reference: string, 
 }
 
 export function generateMockLedger(ledger: Ledger, pattern: MockPattern, companyName: string, batch: number) {
-  const company = companyName.replace(/\b(?:sample|smp)(?=\b|\d)/gi, "").trim().replace(/\s+/g, " ") || "Example Company";
+  const company = companyName.replace(/\b(?:sample|smp)(?=\b|\d)/gi, "").replace(/;/g, " ").trim().replace(/\s+/g, " ") || "Example Company";
   const rows = ledger.transactions;
   const parsedDates = rows.map((row) => templateDate(row.date));
   const known = parsedDates.flatMap((value) => value ? [value] : []);
@@ -129,15 +128,13 @@ export function generateMockLedger(ledger: Ledger, pattern: MockPattern, company
     const date = new Date(Date.UTC(Math.floor(period / 12), period % 12, day));
     const amount = isPayroll ? payrollAmount : BigInt(250 + random(22500));
     const isCredit = isPayroll || balance < amount || index % 5 === 0 || (source.credit > zero && index % 5 !== 1);
-    const narration = isPayroll
-      ? { label: `${payroll[(period + batch) % payroll.length]} ${company}`, channel: "PAY" }
-      : genericNarration(source.description, isCredit, random);
+    const narration = isPayroll ? { label: `STAFF PAY ${company}`, channel: "PAY" } : genericNarration(source.description, isCredit, random);
     const debit = isCredit ? zero : amount;
     const credit = isCredit ? amount : zero;
     balance += credit - debit;
     return {
       date: dateStyle.format(date), dateValue: date,
-      description: styledDescription(source.description, narration.label, serial, narration.channel, descriptions),
+      description: isPayroll ? `${narration.label};${serial};` : styledDescription(source.description, narration.label, serial, narration.channel, descriptions),
       reference: `${narration.channel}${serial}`, debit, credit, balance, category: isPayroll ? "Payroll" : isCredit ? "Credit" : "Debit",
     };
   });

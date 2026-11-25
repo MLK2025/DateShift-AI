@@ -27,7 +27,7 @@ async function template(withFooter: boolean, withReference = true) {
     : ["Transaction Date", "Value Date", "Transaction Description", "Debits", "Credits", "Balance"];
   const movements = ["02-Jan-2028", "18-Jan-2028", "23-Jan-2028", "03-Feb-2028", "11-Feb-2028", "10-Mar-2028", "11-Mar-2028"];
   const transactions = movements.map((date, index) => {
-    const original = ["OLD_REF", "ORIGINAL;DETAIL", "ORIGINAL;DETAIL;CODE", "ORIGINAL / DETAIL", "ORIGINAL : DETAIL", "ORIGINAL DETAIL", "POS 26"][index];
+    const original = ["OLD_REF", "ORIGINAL;DETAIL", "ORIGINAL;DETAIL;CODE", "ORIGINAL / DETAIL", "ORIGINAL : DETAIL", "ORIGINAL : DETAIL", "POS 26"][index];
     return withReference ? [date, original, `SOURCE${index}`, date, "0.00", "10.00", "110.00"]
       : [date, date, original, "0.00", "10.00", "110.00"];
   });
@@ -47,7 +47,7 @@ async function template(withFooter: boolean, withReference = true) {
 
 test("writes synthetic month-end payroll and reconciled figures into the template with a visible footer", async () => {
   const file = await template(true);
-  const result = await createSampleLedgerDocument(file, "SAMPLE SMP Example Co", "salary", 1);
+  const result = await createSampleLedgerDocument(file, "SAMPLE SMP Example; Co", "salary", 1);
   assert.equal(result.fileName, "template-SAMPLE.docx");
   assert.equal(result.rowCount, 7);
   assert.equal(result.payrollCount, 3);
@@ -62,12 +62,14 @@ test("writes synthetic month-end payroll and reconciled figures into the templat
   const rows = ledger.transactions;
   const payroll = rows.filter((row) => /example co/i.test(row.description));
   assert.deepEqual(payroll.map((row) => row.date), ["31-Jan-2028", "29-Feb-2028", "31-Mar-2028"]);
+  assert.deepEqual(payroll.map((row) => row.description),
+    ["STAFF PAY Example Co;020003;", "STAFF PAY Example Co;020005;", "STAFF PAY Example Co;020007;"]);
   assert.ok(payroll.every((row) => row.credit > BigInt(0)));
   assert.equal(new Set(rows.map((row) => row.description)).size, 7);
   assert.ok(rows[0].description.includes("_"));
   assert.equal(rows[2].description.split(";").length, 3);
   assert.ok(rows[3].description.includes("/"));
-  assert.ok(rows[4].description.includes(" : "));
+  assert.ok(rows[5].description.includes(" : "));
   assert.doesNotMatch(xml, /\b(?:sample|smp)(?=\b|\d)/i);
   const refs = cashRows.map(({ reference }) => reference?.textContent);
   assert.equal(new Set(refs).size, rows.length);
