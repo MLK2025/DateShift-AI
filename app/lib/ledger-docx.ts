@@ -205,18 +205,17 @@ function setCashCell(cell: Element, amount: bigint, keepBlank = false) {
   text.textContent = next;
 }
 
-function markProjection(document: Document, currency: string, projection: LedgerProjection, summaries: Summary) {
+function removeLegacyProjectionLabels(document: Document) {
   const body = elements(document.documentElement, "body")[0];
   if (!body) throw new Error("The Word file has no editable document body.");
-  const label = "DateShift transaction projection";
-  const note = [label];
-  const currencyLabel = currency ? `${currency} ` : "";
-  if (!summaries.opening.length) note.push(`Opening balance ${currencyLabel}${formatMoney(projection.opening)}`);
-  if (!summaries.closing.length) note.push(`Closing balance ${currencyLabel}${formatMoney(projection.closing)}`);
-  const paragraphs = children(body, "p");
-  for (const paragraph of paragraphs) {
+  for (const paragraph of children(body, "p")) {
     const nodes = directTextRuns(paragraph);
     const text = nodes.map((node) => node.textContent ?? "").join("");
+    if (/^DateShift transaction projection(?:$|\. (?:Opening|Closing) balance )/.test(text.trim())) {
+      body.removeChild(paragraph);
+      continue;
+    }
+
     const oldHeading = /^(\s*Account Summary)(\s+\(Projection\))\s*$/i.exec(text);
     if (!oldHeading) continue;
 
@@ -228,23 +227,6 @@ function markProjection(document: Document, currency: string, projection: Ledger
     });
     replaceTextInRuns(nodes, starts, oldHeading[1].length, oldHeading[1].length + oldHeading[2].length, "");
   }
-  const existing = paragraphs.find((p) => directTextRuns(p)[0]?.textContent?.startsWith(label));
-  if (existing) {
-    directTextRuns(existing)[0].textContent = note.join(". ");
-    return;
-  }
-  const marker = document.createElementNS(wordNamespace, "w:p");
-  const paragraphProperties = marker.appendChild(document.createElementNS(wordNamespace, "w:pPr"));
-  const spacing = paragraphProperties.appendChild(document.createElementNS(wordNamespace, "w:spacing"));
-  spacing.setAttributeNS(wordNamespace, "w:before", "0");
-  spacing.setAttributeNS(wordNamespace, "w:after", "0");
-  const run = marker.appendChild(document.createElementNS(wordNamespace, "w:r"));
-  const properties = run.appendChild(document.createElementNS(wordNamespace, "w:rPr"));
-  properties.appendChild(document.createElementNS(wordNamespace, "w:b"));
-  const size = properties.appendChild(document.createElementNS(wordNamespace, "w:sz"));
-  size.setAttributeNS(wordNamespace, "w:val", "20");
-  run.appendChild(document.createElementNS(wordNamespace, "w:t")).textContent = note.join(". ");
-  body.insertBefore(marker, children(body, "sectPr")[0] ?? null);
 }
 
 export async function createUpdatedLedgerDocument(file: File, projection: LedgerProjection, dateChanges: DocumentChange[] = []) {
@@ -257,7 +239,7 @@ export async function createUpdatedLedgerDocument(file: File, projection: Ledger
     if (result.appliedCount !== selectedDates.length) throw new Error("Some selected dates could not be written. Review the date selection before downloading.");
     sourceXml = result.xml;
   }
-  const { document, ledger, cashRows, summaries } = indexLedgerXml(sourceXml);
+  const { document, cashRows, summaries } = indexLedgerXml(sourceXml);
   if (cashRows.length !== projection.transactions.length) throw new Error("The Word transaction table no longer matches the projection.");
 
   for (const [index, row] of cashRows.entries()) {
@@ -277,7 +259,7 @@ export async function createUpdatedLedgerDocument(file: File, projection: Ledger
     }
   }
 
-  markProjection(document, ledger.currency, projection, summaries);
+  removeLegacyProjectionLabels(document);
   const updatedXml = new XMLSerializer().serializeToString(document);
   const updated = readLedgerXml(updatedXml);
   const matches = updated.transactions.length === cashRows.length && updated.transactions.every((row, index) => {

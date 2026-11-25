@@ -141,7 +141,7 @@ test("exports projected values in the uploaded DOCX while retaining its other pa
   assert.match(xml, /w:w="11906" w:h="16838"/);
   assert.match(xml, /<w:t>Summary<\/w:t>/);
   assert.doesNotMatch(xml, /\(Projection\)/);
-  assert.match(xml, /<w:t>DateShift transaction projection<\/w:t>.*<w:sectPr>/);
+  assert.doesNotMatch(xml, /DateShift transaction projection/);
   assert.match(xml, /<w:t>Total Dr: <\/w:t><w:t>200.00<\/w:t><w:t>Total Cr: <\/w:t><w:t>350.01<\/w:t>/);
   assert.match(xml, /<w:t>987654320<\/w:t>.*<w:t>04-Jan-2026<\/w:t>/);
   assert.equal(xml.split("<w:t>1,100.00</w:t>").length - 1, 3);
@@ -155,7 +155,9 @@ test("exports projected values in the uploaded DOCX while retaining its other pa
 });
 
 test("writes selected dates and reconciled balances into one copy of the uploaded ledger", async () => {
-  const previousExport = statement.replace("<w:body>", '<w:body><w:p><w:r><w:t>Account Summary</w:t><w:t xml:space="preserve"> (</w:t></w:r><w:r><w:t>Projection)</w:t></w:r></w:p>');
+  const previousExport = statement
+    .replace("<w:body>", '<w:body><w:p><w:r><w:t>Account Summary</w:t><w:t xml:space="preserve"> (</w:t></w:r><w:r><w:t>Projection)</w:t></w:r></w:p>')
+    .replace("</w:body>", "<w:p><w:r><w:t>See the original projection table for details.</w:t></w:r></w:p><w:p><w:r><w:t>DateShift transaction projection. Closing balance GHS 2,010.00</w:t></w:r></w:p></w:body>");
   const zip = new JSZip();
   zip.file("word/document.xml", previousExport);
   const file = new File([await zip.generateAsync({ type: "arraybuffer" })], "ledger.docx");
@@ -173,7 +175,8 @@ test("writes selected dates and reconciled balances into one copy of the uploade
 
   assert.match(xml, /<w:t>Account Summary<\/w:t>/);
   assert.doesNotMatch(xml, /Projection\)/);
-  assert.equal(xml.split("DateShift transaction projection").length - 1, 1);
+  assert.doesNotMatch(xml, /DateShift transaction projection/);
+  assert.match(xml, /See the original projection table for details\./);
   assert.deepEqual(updated.transactions.map((row) => row.date), ["01-Nov-2025", "03-Nov-2025", "04-Nov-2025"]);
   assert.match(xml, /<w:t>123456789<\/w:t>.*<w:t>02-Jan-2026<\/w:t>/);
   assert.match(xml, /<w:t>987654320<\/w:t>.*<w:t>04-Nov-2025<\/w:t>/);
