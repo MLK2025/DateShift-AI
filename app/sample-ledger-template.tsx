@@ -8,6 +8,22 @@ import type { MockPattern } from "./lib/mock-transactions";
 type SampleSettings = { company: string; pattern: MockPattern; batch: number };
 type PreparedSample = Awaited<ReturnType<typeof createSampleLedgerDocument>> & SampleSettings & { source: File };
 
+async function loadWordExporter() {
+  try {
+    return await import("./lib/mock-ledger-docx");
+  } catch (failure) {
+    if (import.meta.env.DEV) throw failure;
+    // An open tab may still reference a chunk removed by a new Pages build.
+    const url = new URL(`${import.meta.env.BASE_URL}_next/static/chunks/mock-ledger-current.js`, window.location.origin);
+    url.searchParams.set("retry", String(Date.now()));
+    try {
+      return await import(/* @vite-ignore */ url.href) as typeof import("./lib/mock-ledger-docx");
+    } catch {
+      throw new Error("The Word exporter couldn’t load. Reload DateShift, then choose your Word template again.");
+    }
+  }
+}
+
 export function SampleLedgerTemplate({ company, pattern, batch }: SampleSettings) {
   const [file, setFile] = useState<File | null>(null);
   const [prepared, setPrepared] = useState<PreparedSample | null>(null);
@@ -34,7 +50,7 @@ export function SampleLedgerTemplate({ company, pattern, batch }: SampleSettings
     setPrepared(null);
     setError("");
     try {
-      const { createSampleLedgerDocument } = await import("./lib/mock-ledger-docx");
+      const { createSampleLedgerDocument } = await loadWordExporter();
       const result = await createSampleLedgerDocument(file, company, pattern, batch);
       setPrepared({ ...result, source: file, company, pattern, batch });
     } catch (failure) {
