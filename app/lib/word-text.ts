@@ -22,7 +22,7 @@ export function replaceTextInRuns(nodes: Element[], starts: number[], start: num
   return affected[0]?.node ?? null;
 }
 
-export async function openWordDocument(file: File) {
+export async function openWordDocument(file: Blob) {
   const zip = await JSZip.loadAsync(await file.arrayBuffer());
   const entry = zip.file("word/document.xml");
   if (!entry) throw new Error("This file does not contain a readable Word document body.");

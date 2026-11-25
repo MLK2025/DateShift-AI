@@ -107,7 +107,7 @@ async function readDocx(file: File): Promise<DocumentExtraction> {
   };
 }
 
-export async function openPdf(file: File) {
+export async function openPdf(file: File, options?: { fontExtraProperties?: boolean }) {
   const pdfjs = await import("pdfjs-dist");
   const workerModule = await import("pdfjs-dist/build/pdf.worker.min.mjs?url");
   pdfjs.GlobalWorkerOptions.workerSrc = workerModule.default;
@@ -115,6 +115,7 @@ export async function openPdf(file: File) {
   return pdfjs.getDocument({
     data: new Uint8Array(await file.arrayBuffer()),
     useWorkerFetch: false,
+    fontExtraProperties: options?.fontExtraProperties,
   });
 }
 

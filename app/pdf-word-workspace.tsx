@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 import { DocxDocumentPreview } from "./docx-preview";
 import type { ConvertedWord, WordConversionMode } from "./lib/pdf-to-word";
-
 export function PdfWordWorkspace({ initialFile = null }: { initialFile?: File | null }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const conversion = useRef<AbortController | null>(null);
@@ -65,6 +64,12 @@ export function PdfWordWorkspace({ initialFile = null }: { initialFile?: File | 
     window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
 
+  function chooseMode(nextMode: WordConversionMode) {
+    setMode(nextMode);
+    setResult(null);
+    setError("");
+  }
+
   return (
     <section className="pdf-word-workspace" aria-label="PDF to Word conversion">
       <div className="workspace-grid">
@@ -92,13 +97,18 @@ export function PdfWordWorkspace({ initialFile = null }: { initialFile?: File | 
           <fieldset className="conversion-formats" disabled={busy}>
             <legend>Choose a Word format</legend>
             <label>
-              <input type="radio" name="wordFormat" checked={mode === "editable"} onChange={() => { setMode("editable"); setResult(null); setError(""); }} />
-              <strong>Editable text</strong>
-              <small>Rebuild selectable text and simple tables. Pages without selectable text are included as images.</small>
+              <input type="radio" name="wordFormat" checked={mode === "editable"} onChange={() => chooseMode("editable")} />
+              <strong>Editable text with original layout</strong>
+              <small>Keep the page artwork and edit selectable text in positioned Word text boxes. Scanned pages are kept as images.</small>
             </label>
             <label>
-              <input type="radio" name="wordFormat" checked={mode === "layout"} onChange={() => { setMode("layout"); setResult(null); setError(""); }} />
-              <strong>Preserve page layout</strong>
+              <input type="radio" name="wordFormat" checked={mode === "reflow"} onChange={() => chooseMode("reflow")} />
+              <strong>Editable paragraphs and tables</strong>
+              <small>Rebuild text and simple tables as regular Word content. This can change the layout.</small>
+            </label>
+            <label>
+              <input type="radio" name="wordFormat" checked={mode === "layout"} onChange={() => chooseMode("layout")} />
+              <strong>Page images</strong>
               <small>Include each page as an image. Works for scans and keeps the page appearance.</small>
             </label>
           </fieldset>

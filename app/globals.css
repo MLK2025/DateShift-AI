@@ -136,6 +136,11 @@ input[type=range] { width: 100%; margin: 17px 0 4px; accent-color: var(--blue); 
 .conversion-preview .document-preview-header strong { overflow-wrap: anywhere; }
 .conversion-preview .document-preview-header small { font-size: .875rem; }
 .conversion-preview .primary-button { width: auto; }
+.positioned-word-preview { display: grid; gap: 24px; justify-items: center; }
+.positioned-word-page { position: relative; overflow: hidden; background: white; box-shadow: 0 9px 28px #1f273526; }
+.positioned-word-page > img { position: absolute; inset: 0; width: 100%; height: 100%; }
+.positioned-word-text { position: absolute; white-space: pre; }
+.positioned-word-text > span { display: inline-block; }
 @media (max-width: 900px) { .ledger-workspace { margin: 0 24px; } }
 @media (max-width: 650px) {
   .ledger-settings, .ledger-totals { grid-template-columns: repeat(2, minmax(0, 1fr)); }
