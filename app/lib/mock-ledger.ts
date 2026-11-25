@@ -40,19 +40,50 @@ export function templateDate(text: string): { date: Date; format: (date: Date) =
 }
 
 const payroll = ["Payroll", "Salary Cr", "Pay Run", "Wages Cr", "Staff Pay", "Monthly Pay"];
-const debits = ["Supply Order", "Service Fee", "Transit Fare", "Stock Purchase", "Test Charge", "Vendor Payment"];
-const credits = ["Test Refund", "Transfer In", "Sample Rebate", "Order Reversal", "Wallet Transfer", "Sample Deposit"];
+type Narration = { channel: string; texts: string[] };
+const debits: Narration[] = [
+  { channel: "POS", texts: ["Card Purchase", "Retail Purchase", "Grocery Purchase", "Merchant Payment"] },
+  { channel: "ATM", texts: ["Cash Withdrawal", "Terminal Withdrawal", "Cash Disbursement"] },
+  { channel: "TRF", texts: ["Transfer Out", "Vendor Transfer", "Online Payment", "Utility Payment"] },
+  { channel: "WLT", texts: ["Mobile Wallet Debit", "Wallet Transfer Out", "Mobile Bill Payment"] },
+  { channel: "FEE", texts: ["Service Charge", "Transfer Commission", "Card Fee", "Account Fee"] },
+];
+const credits: Narration[] = [
+  { channel: "TRF", texts: ["Transfer In", "Incoming Transfer", "Invoice Settlement", "Online Transfer Credit"] },
+  { channel: "DEP", texts: ["Cash Deposit", "Counter Deposit", "Deposit Credit"] },
+  { channel: "WLT", texts: ["Mobile Wallet Credit", "Wallet Transfer In", "Wallet Settlement"] },
+  { channel: "REV", texts: ["Card Refund", "Purchase Reversal", "Fee Reversal", "Merchant Refund"] },
+  { channel: "INT", texts: ["Interest Credit", "Interest Payment", "Account Interest"] },
+];
 
-function styledDescription(original: string, phrase: string, reference: string) {
-  const label = /[a-z]/i.test(original) && original === original.toUpperCase() ? phrase.toUpperCase() : phrase;
-  if (original.includes(";")) return `${label};${reference}`;
-  if (original.includes("_")) return `${reference}_${label}`;
-  if (original.includes("/")) return `${label}/${reference}`;
-  return `${label} ${reference}`;
+function genericNarration(original: string, credit: boolean, random: (limit: number) => number) {
+  const list = credit ? credits : debits;
+  const channel = /\b(?:wallet|momo|mobile|mtn)\b|\bp2p/i.test(original) ? "WLT"
+    : /\b(?:POS|VISA|card purchase)\b/i.test(original) ? "POS"
+    : /\b(?:ATM|withdrawal)\b/i.test(original) ? "ATM"
+    : /\b(?:commission|charge|fee)\b/i.test(original) ? "FEE"
+    : /\b(?:GIP|ACH|EFT|transfer|TRF)\b/i.test(original) ? "TRF"
+    : /\b(?:interest)\b/i.test(original) ? "INT" : undefined;
+  const matching = random(3) === 0 ? undefined : list.find((entry) => entry.channel === channel);
+  const pick = matching ?? list[random(list.length)];
+  return { label: pick.texts[random(pick.texts.length)], channel: pick.channel };
+}
+
+function styledDescription(original: string, phrase: string, reference: string, channel: string, used: Set<string>) {
+  const label = /[a-z]/i.test(original) ? matchCapitalization(phrase, original) : phrase;
+  let description = label;
+  if (original.includes(";")) description = original.split(";").length > 2
+    ? `${label};${reference}; ${channel}` : `${label};${reference}`;
+  else if (original.includes("_")) description = `${reference}_${label}`;
+  else if (original.includes("/")) description = `${label}/${reference}`;
+  else if (original.includes(":")) description = `${label} : ${reference}`;
+  else if (/\d/.test(original) || used.has(label.toUpperCase())) description = `${label} ${reference}`;
+  used.add(description.toUpperCase());
+  return description;
 }
 
 export function generateMockLedger(ledger: Ledger, pattern: MockPattern, companyName: string, batch: number) {
-  const company = companyName.trim().replace(/\s+/g, " ") || "Example Company";
+  const company = companyName.replace(/\b(?:sample|smp)(?=\b|\d)/gi, "").trim().replace(/\s+/g, " ") || "Example Company";
   const rows = ledger.transactions;
   const parsedDates = rows.map((row) => templateDate(row.date));
   const known = parsedDates.flatMap((value) => value ? [value] : []);
@@ -77,14 +108,15 @@ export function generateMockLedger(ledger: Ledger, pattern: MockPattern, company
   const zero = BigInt(0);
   const opening = BigInt(220000 + random(90000));
   let balance = opening;
-  const batchCode = batch.toString(36).toUpperCase().slice(-2).padStart(2, "0");
+  const batchCode = String((batch % 99) + 1).padStart(2, "0");
+  const descriptions = new Set<string>();
   const transactions = rows.map((source, index) => {
-    const reference = `SMP${batchCode}${String(index + 1).padStart(4, "0")}`;
-    const shortRef = `SMP${String(index + 1).padStart(3, "0")}`;
+    const serial = `${batchCode}${String(index + 1).padStart(4, "0")}`;
     const dateStyle = parsedDates[index] ?? known[0];
     if (index < openingSlots) return {
-      date: dateStyle.format(startDate), dateValue: startDate, description: styledDescription(source.description, "Opening Bal", shortRef),
-      reference, debit: zero, credit: zero, balance, category: "Opening balance",
+      date: dateStyle.format(startDate), dateValue: startDate,
+      description: styledDescription(source.description, "Opening Bal", serial, "BAL", descriptions),
+      reference: `BAL${serial}`, debit: zero, credit: zero, balance, category: "Opening balance",
     };
 
     const period = slots[index - openingSlots];
@@ -97,13 +129,16 @@ export function generateMockLedger(ledger: Ledger, pattern: MockPattern, company
     const date = new Date(Date.UTC(Math.floor(period / 12), period % 12, day));
     const amount = isPayroll ? payrollAmount : BigInt(250 + random(22500));
     const isCredit = isPayroll || balance < amount || index % 5 === 0 || (source.credit > zero && index % 5 !== 1);
-    const label = isPayroll ? `${payroll[(period + batch) % payroll.length]} ${company}` : (isCredit ? credits : debits)[random(debits.length)];
+    const narration = isPayroll
+      ? { label: `${payroll[(period + batch) % payroll.length]} ${company}`, channel: "PAY" }
+      : genericNarration(source.description, isCredit, random);
     const debit = isCredit ? zero : amount;
     const credit = isCredit ? amount : zero;
     balance += credit - debit;
     return {
-      date: dateStyle.format(date), dateValue: date, description: styledDescription(source.description, label, shortRef),
-      reference, debit, credit, balance, category: isPayroll ? "Payroll" : isCredit ? "Credit" : "Debit",
+      date: dateStyle.format(date), dateValue: date,
+      description: styledDescription(source.description, narration.label, serial, narration.channel, descriptions),
+      reference: `${narration.channel}${serial}`, debit, credit, balance, category: isPayroll ? "Payroll" : isCredit ? "Credit" : "Debit",
     };
   });
   const totals = reconcileLedger({ ...ledger, opening, transactions });

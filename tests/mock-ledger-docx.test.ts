@@ -19,15 +19,20 @@ function table(rows: string[][]) {
   return `<w:tbl><w:tblPr><w:tblStyle w:val="SourceStyle"/></w:tblPr>${rows.map((row) => `<w:tr>${row.map((cell) => `<w:tc><w:tcPr><w:shd w:fill="E3E8EA"/></w:tcPr><w:p><w:r><w:t>${cell}</w:t></w:r></w:p></w:tc>`).join("")}</w:tr>`).join("")}</w:tbl>`;
 }
 
-async function template(withFooter: boolean) {
+async function template(withFooter: boolean, withReference = true) {
   const zip = new JSZip();
   const summaries = table([["Currency", "GHS"], ["Opening Balance", "100.00"], ["Closing Balance", "110.00"], ["Total Debits", "30.00"], ["Total Credits", "40.00"]]);
-  const headers = ["Date", "Description", "Ref / Chq No.", "Value Date", "Debit", "Credit", "Balance"];
+  const headers = withReference
+    ? ["Date", "Description", "Ref / Chq No.", "Value Date", "Debit", "Credit", "Balance"]
+    : ["Transaction Date", "Value Date", "Transaction Description", "Debits", "Credits", "Balance"];
   const movements = ["02-Jan-2028", "18-Jan-2028", "23-Jan-2028", "03-Feb-2028", "11-Feb-2028", "10-Mar-2028", "11-Mar-2028"];
-  const transactions = movements.map((date, index) =>
-    [date, index % 2 ? "ORIGINAL;DETAIL" : "OLD_REF", `SOURCE${index}`, date, "0.00", "10.00", "110.00"]);
+  const transactions = movements.map((date, index) => {
+    const original = ["OLD_REF", "ORIGINAL;DETAIL", "ORIGINAL;DETAIL;CODE", "ORIGINAL / DETAIL", "ORIGINAL : DETAIL", "ORIGINAL DETAIL", "POS 26"][index];
+    return withReference ? [date, original, `SOURCE${index}`, date, "0.00", "10.00", "110.00"]
+      : [date, date, original, "0.00", "10.00", "110.00"];
+  });
   const transTables = table([headers, ...transactions.slice(0, 4)]) + table(transactions.slice(4));
-  const section = withFooter ? '<w:footerReference w:type="default" r:id="rId7"/>' : '<w:titlePg/>';
+  const section = withFooter ? '<w:footerReference w:type="default" r:id="rId7"/>' : '<w:pgMar w:footer="0"/><w:titlePg/>';
   zip.file("word/document.xml", `<w:document xmlns:w="${word}" xmlns:r="${office}"><w:body><w:p><w:r><w:t>Statement Period</w:t></w:r></w:p><w:p><w:r><w:t>02-Jan-2028 - 11-Mar-2028</w:t></w:r></w:p>${summaries}${transTables}<w:sectPr>${section}</w:sectPr></w:body></w:document>`);
   zip.file("[Content_Types].xml", `<Types xmlns="${types}"/>`);
   zip.file("word/styles.xml", "preserve this part");
@@ -42,7 +47,7 @@ async function template(withFooter: boolean) {
 
 test("writes synthetic month-end payroll and reconciled figures into the template with a visible footer", async () => {
   const file = await template(true);
-  const result = await createSampleLedgerDocument(file, "Example Co", "salary", 1);
+  const result = await createSampleLedgerDocument(file, "SAMPLE SMP Example Co", "salary", 1);
   assert.equal(result.fileName, "template-SAMPLE.docx");
   assert.equal(result.rowCount, 7);
   assert.equal(result.payrollCount, 3);
@@ -53,12 +58,20 @@ test("writes synthetic month-end payroll and reconciled figures into the templat
   assert.doesNotMatch(xml, /ORIGINAL|OLD_REF|SOURCE\d/);
   assert.equal(xml.split("<w:tbl>").length - 1, 3);
   assert.match(xml, /w:val="SourceStyle"/);
-  const { ledger, summaries } = indexLedgerXml(xml);
+  const { ledger, summaries, cashRows } = indexLedgerXml(xml);
   const rows = ledger.transactions;
   const payroll = rows.filter((row) => /example co/i.test(row.description));
   assert.deepEqual(payroll.map((row) => row.date), ["31-Jan-2028", "29-Feb-2028", "31-Mar-2028"]);
   assert.ok(payroll.every((row) => row.credit > BigInt(0)));
   assert.equal(new Set(rows.map((row) => row.description)).size, 7);
+  assert.ok(rows[0].description.includes("_"));
+  assert.equal(rows[2].description.split(";").length, 3);
+  assert.ok(rows[3].description.includes("/"));
+  assert.ok(rows[4].description.includes(" : "));
+  assert.doesNotMatch(xml, /\b(?:sample|smp)(?=\b|\d)/i);
+  const refs = cashRows.map(({ reference }) => reference?.textContent);
+  assert.equal(new Set(refs).size, rows.length);
+  assert.ok(refs.every((ref) => /^[A-Z]{3}\d{6}$/.test(ref ?? "")));
   assert.equal(rows[0].balance, ledger.opening);
   assert.equal(ledger.reportedClosing, rows.at(-1)?.balance);
   const totals = reconcileLedger(ledger);
@@ -76,13 +89,19 @@ test("writes synthetic month-end payroll and reconciled figures into the templat
   assert.equal((await repeatedZip.file("word/footer1.xml")?.async("string"))?.split("<w:t>SAMPLE</w:t>").length, 2);
 });
 
-test("adds a sample footer to Word templates without footer parts, including first and even pages", async () => {
-  const result = await createSampleLedgerDocument(await template(false), "", "non-salary", 3);
+test("updates Transaction Description tables with no reference column and adds a footer to first and even pages", async () => {
+  const result = await createSampleLedgerDocument(await template(false, false), "", "non-salary", 3);
   assert.equal(result.payrollCount, 0);
   const zip = await JSZip.loadAsync(await result.blob.arrayBuffer());
   const xml = await zip.file("word/document.xml")?.async("string");
   assert.ok(xml);
+  const { ledger, cashRows } = indexLedgerXml(xml);
+  assert.equal(ledger.transactions.length, 7);
+  assert.equal(reconcileLedger(ledger).mismatches, 0);
+  assert.ok(cashRows.every((row) => !row.reference && row.valueDate));
+  assert.doesNotMatch(xml, /\b(?:sample|smp)(?=\b|\d)/i);
   for (const variant of ["default", "first", "even"]) assert.match(xml, new RegExp(`<w:footerReference w:type="${variant}"`));
+  assert.match(xml, /<w:pgMar w:footer="120"/);
   assert.match(await zip.file("word/dateshift-sample-footer1.xml")?.async("string") ?? "", /<w:t>SAMPLE<\/w:t>/);
   assert.match(await zip.file("[Content_Types].xml")?.async("string") ?? "", /wordprocessingml\.footer\+xml/);
 });

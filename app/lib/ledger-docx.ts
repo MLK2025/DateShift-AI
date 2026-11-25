@@ -26,7 +26,7 @@ function headerColumns(row: string[]) {
   const credit = labels.findIndex((label) => /^(?:credits?|deposits?|money in|payments in)\b/.test(label));
   const balance = labels.findIndex((label) => /^(?:(?:running|available) )?balance\b/.test(label));
   if ([date, debit, credit, balance].some((index) => index < 0)) return null;
-  const description = labels.findIndex((label) => /^(?:description|details|narration|particulars|transaction details)\b/.test(label));
+  const description = labels.findIndex((label) => /^(?:(?:transaction )?(?:description|details|narration)|particulars)\b/.test(label));
   const reference = labels.findIndex((label) => /^(?:(?:transaction )?ref(?:erence)?|chq|cheque|check)\b/.test(label));
   const valueDate = labels.findIndex((label) => /^(?:value|effective) date\b/.test(label));
   return { date, debit, credit, balance, description, reference, valueDate, width: row.length };

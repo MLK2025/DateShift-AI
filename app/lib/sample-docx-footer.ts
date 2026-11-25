@@ -72,6 +72,11 @@ export async function addSampleFooter(zip: JSZip, document: Document) {
       inherited.set(kind, newId);
       referenced.add(newId);
     }
+    const margins = section.getElementsByTagNameNS(word, "pgMar")[0];
+    if (margins && newId && variants.some((kind) => inherited.get(kind) === newId)
+      && Number(margins.getAttributeNS(word, "footer")) < 120) {
+      margins.setAttributeNS(word, "w:footer", "120");
+    }
   }
 
   const serializer = new XMLSerializer();
