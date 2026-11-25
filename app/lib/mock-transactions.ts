@@ -33,7 +33,7 @@ const payrollDescriptions = [
 const payrollReferenceCodes = ["PAY", "WAGE", "SAL", "RUN", "HR", "CREDIT"];
 const sampleDayRanges = [[2, 5], [8, 13], [16, 20], [23, 26], [27, 28]];
 
-function seededInteger(seed: number) {
+export function seededInteger(seed: number) {
   let state = seed >>> 0;
   return (limit: number) => {
     state = (Math.imul(state, 1664525) + 1013904223) >>> 0;

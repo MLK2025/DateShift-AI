@@ -15,7 +15,7 @@ function children(parent: Element, name: string) {
   );
 }
 
-function cellText(cell: Element) {
+export function cellText(cell: Element) {
   return elements(cell, "p").map((paragraph) => elements(paragraph, "t").map((run) => run.textContent ?? "").join("")).join(" ").replace(/\s+/g, " ").trim();
 }
 
@@ -27,10 +27,20 @@ function headerColumns(row: string[]) {
   const balance = labels.findIndex((label) => /^(?:(?:running|available) )?balance\b/.test(label));
   if ([date, debit, credit, balance].some((index) => index < 0)) return null;
   const description = labels.findIndex((label) => /^(?:description|details|narration|particulars|transaction details)\b/.test(label));
-  return { date, debit, credit, balance, description, width: row.length };
+  const reference = labels.findIndex((label) => /^(?:(?:transaction )?ref(?:erence)?|chq|cheque|check)\b/.test(label));
+  const valueDate = labels.findIndex((label) => /^(?:value|effective) date\b/.test(label));
+  return { date, debit, credit, balance, description, reference, valueDate, width: row.length };
 }
 
-type CashRow = { debit: Element; credit: Element; balance: Element };
+type CashRow = {
+  debit: Element;
+  credit: Element;
+  balance: Element;
+  date: Element;
+  description?: Element;
+  reference?: Element;
+  valueDate?: Element;
+};
 type Summary = Record<"opening" | "closing" | "debit" | "credit", Element[]>;
 
 const summaryLabels = {
@@ -55,7 +65,7 @@ export function hasTransactionColumns(text: string) {
   return /\b(?:debits?|withdrawals?|money out)\b[\s\S]{0,45}\b(?:credits?|deposits?|money in)\b[\s\S]{0,45}\bbalance\b/i.test(text);
 }
 
-function indexLedgerXml(xml: string) {
+export function indexLedgerXml(xml: string) {
   const document = new DOMParser().parseFromString(xml, "application/xml");
   if (!document.documentElement || document.getElementsByTagName("parsererror").length) throw new Error("The Word file contains unreadable XML.");
   const tables = elements(document.documentElement, "tbl").map((table) =>
@@ -117,7 +127,10 @@ function indexLedgerXml(xml: string) {
       // The debit column defines outflow even in source files that print debits with a minus sign.
       const outflow = (debit < 0 ? -debit : debit) + (credit < 0 ? -credit : BigInt(0));
       transactions.push({ date, description, debit: outflow, credit: credit < 0 ? BigInt(0) : credit, balance });
-      cashRows.push({ debit: cells[columns.debit], credit: cells[columns.credit], balance: cells[columns.balance] });
+      cashRows.push({
+        debit: cells[columns.debit], credit: cells[columns.credit], balance: cells[columns.balance],
+        date: cells[columns.date], description: cells[columns.description], reference: cells[columns.reference], valueDate: cells[columns.valueDate],
+      });
     }
   }
 
@@ -142,7 +155,7 @@ export async function readLedger(file: File) {
 
 const docxMime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
-function directTextRuns(paragraph: Element) {
+export function directTextRuns(paragraph: Element) {
   return children(paragraph, "r").flatMap((run) => children(run, "t"));
 }
 
@@ -175,15 +188,46 @@ function cashCellValue(cell: Element, amount: bigint, keepBlank: boolean) {
   return currencyPrefix ? `${currencyPrefix} ${amountText}` : amountText;
 }
 
-function setCashCell(cell: Element, amount: bigint, keepBlank = false) {
-  const next = cashCellValue(cell, amount, keepBlank);
+function setCashCell(cell: Element, amount: bigint, keepBlank = false, matchCell?: Element) {
+  setLedgerCellText(cell, cashCellValue(cell, amount, keepBlank), { matchCell: amount !== BigInt(0) ? matchCell : undefined });
+}
+
+function matchAmountStyle(text: Element, example: Element) {
+  const source = elements(example, "t").find((node) => node.textContent?.trim());
+  const run = text.parentNode as Element;
+  const sourceRun = source?.parentNode as Element | undefined;
+  const owner = text.ownerDocument!;
+  if (!sourceRun) return;
+  const copyProperty = (target: Element, original: Element, name: string) => {
+    const reference = children(original, name)[0];
+    if (!reference) return;
+    const previous = children(target, name)[0];
+    const copy = owner.importNode(reference, true);
+    if (previous) target.replaceChild(copy, previous);
+    else target.insertBefore(copy, name === "rPr" ? target.firstChild : children(target, "rPr")[0] ?? null);
+  };
+
+  copyProperty(run, sourceRun, "rPr");
+  const para = run.parentNode as Element;
+  const sourceProperties = children(sourceRun.parentNode as Element, "pPr")[0];
+  if (!sourceProperties || !children(sourceProperties, "jc").length) return;
+  const properties = children(para, "pPr")[0] ?? para.insertBefore(owner.createElementNS(wordNamespace, "w:pPr"), para.firstChild);
+  copyProperty(properties, sourceProperties, "jc");
+}
+
+export function setLedgerCellText(cell: Element, next: string, { singleRun = false, matchCell }: { singleRun?: boolean; matchCell?: Element } = {}) {
   if (next === cellText(cell)) return;
   if (elements(cell, "fldSimple").length || elements(cell, "instrText").length || elements(cell, "dataBinding").length) {
-    throw new Error("A balance or transaction amount is a Word field. Convert that field to regular text before exporting.");
+    throw new Error("An editable ledger value is a Word field. Convert that field to regular text before exporting.");
   }
 
   const runs = elements(cell, "t");
   const existing = runs.filter((node) => Boolean(node.textContent?.trim()));
+  if (singleRun && existing[0]) {
+    for (const run of runs) run.textContent = "";
+    existing[0].textContent = next;
+    return;
+  }
   if (existing.length) {
     // Keep the original paragraphs and character styles. Extra characters
     // inherit the last run's formatting, as in the date editor.
@@ -196,13 +240,46 @@ function setCashCell(cell: Element, amount: bigint, keepBlank = false) {
     });
     return;
   }
-  if (runs[0]) { runs[0].textContent = next; return; }
-  const document = cell.ownerDocument!;
-  const paragraph = elements(cell, "p")[0];
-  if (!paragraph) throw new Error("A transaction amount has no editable Word paragraph.");
-  const run = children(paragraph, "r").at(-1) ?? paragraph.appendChild(document.createElementNS(wordNamespace, "w:r"));
-  const text = run.appendChild(document.createElementNS(wordNamespace, "w:t"));
+  let text = runs[0];
+  if (!text) {
+    const document = cell.ownerDocument!;
+    const paragraph = elements(cell, "p")[0];
+    if (!paragraph) throw new Error("A ledger cell has no editable Word paragraph.");
+    const run = children(paragraph, "r").at(-1) ?? paragraph.appendChild(document.createElementNS(wordNamespace, "w:r"));
+    text = run.appendChild(document.createElementNS(wordNamespace, "w:t"));
+  }
+  if (matchCell) matchAmountStyle(text, matchCell);
   text.textContent = next;
+}
+
+export function writeLedgerAmounts(
+  document: Document,
+  cashRows: CashRow[],
+  summaries: Summary,
+  projection: Pick<LedgerProjection, "opening" | "closing" | "debitTotal" | "creditTotal" | "transactions">,
+  matchBlankStyles = false,
+) {
+  const example = (kind: "debit" | "credit") => matchBlankStyles
+    ? cashRows.find((row) => (parseMoney(cellText(row[kind])) ?? BigInt(0)) !== BigInt(0))?.[kind]
+    : undefined;
+  const debitStyle = example("debit");
+  const creditStyle = example("credit");
+  for (const [index, row] of cashRows.entries()) {
+    const amount = projection.transactions[index];
+    setCashCell(row.debit, amount.debit, true, debitStyle);
+    setCashCell(row.credit, amount.credit, true, creditStyle);
+    setCashCell(row.balance, amount.balance);
+  }
+  const totals = { opening: projection.opening, closing: projection.closing, debit: projection.debitTotal, credit: projection.creditTotal };
+  for (const key of Object.keys(summaries) as (keyof Summary)[]) {
+    for (const cell of summaries[key]) setCashCell(cell, totals[key]);
+  }
+  for (const { nodes, starts, matches } of inlineTotals(document)) {
+    for (const { kind, start, value } of matches.reverse()) {
+      const next = formatMoney(totals[kind]);
+      if (value !== next) replaceTextInRuns(nodes, starts, start, start + value.length, next);
+    }
+  }
 }
 
 function removeLegacyProjectionLabels(document: Document) {
@@ -242,23 +319,7 @@ export async function createUpdatedLedgerDocument(file: File, projection: Ledger
   const { document, cashRows, summaries } = indexLedgerXml(sourceXml);
   if (cashRows.length !== projection.transactions.length) throw new Error("The Word transaction table no longer matches the projection.");
 
-  for (const [index, row] of cashRows.entries()) {
-    const amount = projection.transactions[index];
-    setCashCell(row.debit, amount.debit, true);
-    setCashCell(row.credit, amount.credit, true);
-    setCashCell(row.balance, amount.balance);
-  }
-  const totals = { opening: projection.opening, closing: projection.closing, debit: projection.debitTotal, credit: projection.creditTotal };
-  for (const key of Object.keys(summaries) as (keyof Summary)[]) {
-    for (const cell of summaries[key]) setCashCell(cell, totals[key]);
-  }
-  for (const { nodes, starts, matches } of inlineTotals(document)) {
-    for (const { kind, start, value } of matches.reverse()) {
-      const next = formatMoney(totals[kind]);
-      if (value !== next) replaceTextInRuns(nodes, starts, start, start + value.length, next);
-    }
-  }
-
+  writeLedgerAmounts(document, cashRows, summaries, projection);
   removeLegacyProjectionLabels(document);
   const updatedXml = new XMLSerializer().serializeToString(document);
   const updated = readLedgerXml(updatedXml);

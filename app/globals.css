@@ -144,6 +144,10 @@ input[type=range] { width: 100%; margin: 17px 0 4px; accent-color: var(--blue); 
 .mock-table-scroll :is(th, td).mock-amount { text-align: right; }
 .mock-table-scroll td:nth-child(2) { min-width: 190px; overflow-wrap: anywhere; }
 .mock-table-scroll tr:last-child td { border-bottom: 0; }
+.sample-template { min-width: 0; }
+.sample-template-fields { display: grid; grid-template-columns: minmax(0, 440px) auto; gap: 12px; align-items: end; justify-content: start; }
+.sample-template-fields .primary-button { width: auto; min-height: 44px; }
+.sample-template .conversion-preview { margin-inline: 0; }
 .pdf-word-panel { min-width: 0; }
 .pdf-word-panel h2, .conversion-formats legend { color: var(--ink); font-size: 1.125rem; font-weight: 800; margin: 0 0 9px; }
 .pdf-word-panel p { color: var(--muted); font-size: .9rem; margin: 0 0 16px; }
@@ -386,6 +390,7 @@ input[type=range] { width: 100%; margin: 17px 0 4px; accent-color: var(--blue); 
   .mock-workspace { margin-inline: 14px; }
   .mock-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .mock-filters > label:first-child { grid-column: 1 / -1; }
+  .sample-template-fields { grid-template-columns: 1fr; }
   .conversion-preview { margin-inline: 14px; }
   .dropzone { min-height: 230px; }
   .preview-strip { margin: 16px 14px 0; } .preview-heading { min-width: 0; }

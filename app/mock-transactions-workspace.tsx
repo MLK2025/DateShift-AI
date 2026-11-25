@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { filterMockTransactions, generateMockTransactions, type MockPattern } from "./lib/mock-transactions";
+import { SampleLedgerTemplate } from "./sample-ledger-template";
 
 const amountFormat = new Intl.NumberFormat("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const monthFormat = new Intl.DateTimeFormat("en-GB", { month: "long", year: "numeric", timeZone: "UTC" });
@@ -40,6 +41,8 @@ export function MockTransactionsWorkspace() {
         </fieldset>
         <button type="button" className="primary-button" onClick={() => setBatch((current) => current + 1)}>Regenerate samples</button>
       </article>
+
+      <SampleLedgerTemplate company={company} pattern={pattern} batch={batch} />
 
       <article className="panel mock-table">
         <div className="mock-table-heading">
